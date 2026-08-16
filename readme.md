@@ -3,15 +3,30 @@
 > **AI 一站式短剧/漫剧生成平台**  
 > *Industrial AI Motion Comic & Video Workbench*
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+<p>
+  <a href="https://github.com/bo961386926/manga-studio/actions/workflows/ci.yml"><img src="https://github.com/bo961386926/manga-studio/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/bo961386926/manga-studio/releases"><img src="https://img.shields.io/github/v/release/bo961386926/manga-studio" alt="Release"></a>
+  <a href="https://github.com/bo961386926/manga-studio/stargazers"><img src="https://img.shields.io/github/stars/bo961386926/manga-studio" alt="Stars"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
+</p>
 
-- 项目主页: https://coderx.me/
-- 源码仓库: https://github.com/bo961386926/manga-studio
-
+- 🚀 **在线演示**: https://bo961386926.github.io/manga-studio/ (界面 Demo,AI 生成功能需本地运行)
+- 🏠 项目主页: https://coderx.me/
+- 📦 源码仓库: https://github.com/bo961386926/manga-studio
 
 **漫剧工场** 是一个面向短剧、漫剧、动态漫画与影视分镜创作者的 AI 生产工作台，目标是把故事创意快速转化为可预览、可导出、可继续剪辑的视觉资产与视频片段。
 
 项目采用 **Script-to-Asset-to-Keyframe** 工作流：先完成剧情与分镜，再生成角色/场景资产，随后在 AI工作台中制作关键帧与视频，最后统一预览和导出。
+
+## ✨ 核心特性
+
+- 🎬 **关键帧驱动** — 先画起止帧,再由视频模型插值生成运动,稳定控制角色与构图
+- 🎭 **角色一致性** — 画面生成参考角色定妆、服装变体与场景概念图
+- 📝 **AI 剧本拆解** — 故事大纲一键生成剧本结构、角色、场景与分镜
+- 🎨 **资产工厂** — 角色定妆 / 服装变体 / 场景概念图批量生成
+- 🖥️ **工业级工作台** — 镜头管理、关键帧编辑、视频生成与渲染日志
+- 📦 **多端交付** — Web / Electron 桌面端 / Docker 部署
+- 🌗 **深浅主题** — 支持跟随系统主题切换
 
 ## 界面展示
 
