@@ -65,5 +65,6 @@ docker-compose.override.yml
 # Temporary files
 tmp/
 temp/
+.worktrees/
 *.tmp
 *.bak
