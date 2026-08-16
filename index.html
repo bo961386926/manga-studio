@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <!-- Author: forsearch | Updated: 2026-04-30 -->
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    
+    <title>漫剧工场 - 工业级 AI 漫剧与视频生成工作台</title>
+    <meta name="title" content="漫剧工场 - 工业级 AI 漫剧与视频生成工作台" />
+    <meta name="description" content="专为 AI 漫剧、动态漫画及影视分镜设计的专业生产力工具。采用关键帧驱动工作流，支持角色一致性保证、工业化生产流程，基于 GPT-5.1、Gemini-3-Pro 和 Veo 3.1 模型。" />
+    <meta name="keywords" content="AI漫剧,AI视频生成,动态漫画,影视分镜,Motion Comics,Animatic,关键帧生成,角色一致性,Veo,GPT,Gemini,AI导演,视频制作工具" />
+    <meta name="author" content="forsearch" />
+    <meta name="robots" content="index, follow" />
+    <meta name="language" content="Chinese" />
+    <meta name="revisit-after" content="7 days" />
+    
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://coderx.me/" />
+    <meta property="og:title" content="漫剧工场 - 工业级 AI 漫剧与视频生成工作台" />
+    <meta property="og:description" content="专为 AI 漫剧、动态漫画及影视分镜设计的专业生产力工具。采用关键帧驱动工作流，支持角色一致性保证、工业化生产流程。" />
+    <meta property="og:image" content="/logo.svg" />
+    <meta property="og:image:width" content="512" />
+    <meta property="og:image:height" content="512" />
+    <meta property="og:locale" content="zh_CN" />
+    <meta property="og:site_name" content="漫剧工场" />
+    
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:url" content="https://coderx.me/" />
+    <meta name="twitter:title" content="漫剧工场 - 工业级 AI 漫剧与视频生成工作台" />
+    <meta name="twitter:description" content="专为 AI 漫剧、动态漫画及影视分镜设计的专业生产力工具。采用关键帧驱动工作流，支持角色一致性保证、工业化生产流程。" />
+    <meta name="twitter:image" content="/logo.svg" />
+    
+    <link rel="canonical" href="https://coderx.me/" />
+    
+    <link rel="icon" type="image/svg+xml" href="/logo.svg" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/logo.svg" />
+    
+    <meta name="theme-color" content="#050505" />
+    <meta name="msapplication-TileColor" content="#050505" />
+    
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "SoftwareApplication",
+      "name": "漫剧工场",
+      "applicationCategory": "MultimediaApplication",
+      "operatingSystem": "Web Browser",
+      "description": "工业级 AI 漫剧与视频生成工作台，专为 AI 漫剧、动态漫画及影视分镜设计的专业生产力工具",
+      "offers": {
+        "@type": "Offer",
+        "price": "0",
+        "priceCurrency": "CNY"
+      },
+      "aggregateRating": {
+        "@type": "AggregateRating",
+        "ratingValue": "4.8",
+        "ratingCount": "156"
+      },
+      "creator": {
+        "@type": "Organization",
+        "name": "forsearch",
+        "url": "https://coderx.me"
+      },
+      "featureList": [
+        "关键帧驱动生成",
+        "角色一致性保证",
+        "工业化生产流程",
+        "本地数据存储"
+      ],
+      "screenshot": "/logo.svg",
+      "softwareVersion": "1.0.0",
+      "url": "https://coderx.me"
+    }
+    </script>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+      body {
+        font-family: 'Inter', sans-serif;
+        background-color: #050505;
+        color: #e5e5e5;
+      }
+      ::-webkit-scrollbar {
+        width: 6px;
+        height: 6px;
+      }
+      ::-webkit-scrollbar-track {
+        background: #0a0a0a; 
+      }
+      ::-webkit-scrollbar-thumb {
+        background: #333; 
+        border-radius: 0px;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: #555; 
+      }
+      
+      .font-mono {
+        font-family: 'JetBrains Mono', monospace;
+      }
+      
+      .glass-panel {
+        background: rgba(20, 20, 20, 0.6);
+        backdrop-filter: blur(12px);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+      }
+
+      select {
+        color-scheme: dark;
+      }
+
+      select option {
+        background: #0f172a;
+        color: #e0f2fe;
+      }
+
+      select option:checked {
+        background: #0e7490;
+        color: #ffffff;
+      }
+    </style>
+  <script>
+    // 主题初始化(防闪烁):auto=跟随系统,light/dark=手动指定
+    (function () {
+      function getSaved() {
+        try { return localStorage.getItem('ai_manga_theme') || 'auto'; } catch (e) { return 'auto'; }
+      }
+      function applyTheme() {
+        var saved = getSaved();
+        var isLight;
+        if (saved === 'light') isLight = true;
+        else if (saved === 'dark') isLight = false;
+        else isLight = !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches);
+        document.documentElement.classList.toggle('light', isLight);
+        document.documentElement.setAttribute('data-theme', saved);
+      }
+      applyTheme();
+      // auto 模式下实时跟随系统主题变化
+      if (window.matchMedia) {
+        var mq = window.matchMedia('(prefers-color-scheme: light)');
+        var onSystemChange = function () {
+          if (getSaved() === 'auto') applyTheme();
+        };
+        if (mq.addEventListener) mq.addEventListener('change', onSystemChange);
+        else if (mq.addListener) mq.addListener(onSystemChange);
+      }
+    })();
+  </script>
+  <style id="theme-light-css">
+    /* ===== 浅色主题覆盖层(html.light 时生效)===== */
+    html.light body {
+      background-color: #f1f5f9 !important;
+      color: #0f172a !important;
+    }
+    html.light select, html.light input, html.light textarea { color-scheme: light !important; }
+
+    /* 背景:深色底(slate-950 系,含 /90 /75 等半透明) → 浅色 */
+    html.light [class*="bg-slate-950"] { background-color: #f8fafc !important; }
+    html.light [class*="bg-slate-900"] { background-color: #eef2f7 !important; }
+    html.light [class*="bg-zinc-8"], html.light [class*="bg-zinc-7"] { background-color: #e4e4e7 !important; }
+    html.light [class*="bg-[#050505]"] { background-color: #f1f5f9 !important; }
+    html.light [class*="bg-[#0A0A0A]"], html.light [class*="bg-[#0a0a0a]"] { background-color: #ffffff !important; }
+    html.light [class*="bg-black/"] { background-color: rgba(15, 23, 42, 0.25) !important; }
+    html.light [class*="bg-white/5"] { background-color: rgba(15, 23, 42, 0.05) !important; }
+    html.light [class*="bg-white/10"] { background-color: rgba(15, 23, 42, 0.08) !important; }
+    html.light [class*="bg-white/["] { background-color: rgba(15, 23, 42, 0.06) !important; }
+
+    /* 深色径向/线性渐变装饰层 → 浅色渐变 */
+    html.light [class*="radial-gradient"] {
+      background: linear-gradient(180deg, rgba(248, 250, 252, 0.95), rgba(226, 232, 240, 0.98)) !important;
+    }
+
+    /* 文字:白色 → 深色;灰阶 → 加深;青色强调 → 深青 */
+    html.light .text-white { color: #0f172a !important; }
+    html.light .text-slate-100 { color: #1e293b !important; }
+    html.light .text-slate-200 { color: #334155 !important; }
+    html.light .text-slate-300, html.light .text-slate-400, html.light .text-slate-500, html.light .text-slate-600 { color: #475569 !important; }
+    html.light [class*="text-zinc-1"], html.light [class*="text-zinc-2"] { color: #27272a !important; }
+    html.light [class*="text-zinc-3"], html.light [class*="text-zinc-4"], html.light [class*="text-zinc-5"], html.light [class*="text-zinc-6"], html.light [class*="text-zinc-7"], html.light [class*="text-zinc-8"] { color: #3f3f46 !important; }
+    html.light [class*="text-cyan-3"], html.light [class*="text-cyan-2"] { color: #0e7490 !important; }
+    html.light [class*="text-cyan-1"], html.light [class*="text-cyan-100"], html.light [class*="text-cyan-200"] { color: #155e75 !important; }
+    html.light [class*="text-red-4"], html.light [class*="text-red-5"] { color: #dc2626 !important; }
+    html.light [class*="text-emerald-"], html.light [class*="text-green-"] { color: #059669 !important; }
+
+    /* 边框:white 系 → 深灰;cyan 系 → 深青 */
+    html.light [class*="border-white/10"] { border-color: rgba(15, 23, 42, 0.12) !important; }
+    html.light [class*="border-white/15"] { border-color: rgba(15, 23, 42, 0.15) !important; }
+    html.light [class*="border-white/5"] { border-color: rgba(15, 23, 42, 0.08) !important; }
+    html.light [class*="border-cyan-200/"], html.light [class*="border-cyan-300/"] { border-color: rgba(14, 116, 144, 0.35) !important; }
+
+    /* 青色半透明底(图标底/激活态) → 深青淡底;纯 cyan-300 主按钮保持醒目 */
+    html.light [class*="bg-cyan-300/"], html.light [class*="bg-cyan-200/"] { background-color: rgba(8, 145, 178, 0.15) !important; }
+
+    /* 阴影淡化 */
+    html.light [class*="shadow-cyan-950"] { box-shadow: 0 20px 40px -12px rgba(51, 65, 85, 0.15) !important; }
+    html.light [class*="shadow-cyan-500"] { box-shadow: 0 10px 25px -5px rgba(8, 145, 178, 0.2) !important; }
+
+    /* 滚动条适配浅色 */
+    html.light ::-webkit-scrollbar-track { background: #e2e8f0 !important; }
+    html.light ::-webkit-scrollbar-thumb { background: #94a3b8 !important; }
+  </style>
+  <script type="importmap">
+{
+  "imports": {
+    "react": "https://aistudiocdn.com/react@^19.2.0",
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
+    "react/": "https://aistudiocdn.com/react@^19.2.0/",
+    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.30.0",
+    "lucide-react": "https://aistudiocdn.com/lucide-react@^0.554.0"
+  }
+}
+</script>
+</head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/index.tsx"></script>
+  </body>
+</html>

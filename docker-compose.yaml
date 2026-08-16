@@ -1,0 +1,57 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: manga-studio-db
+    environment:
+      POSTGRES_DB: manga_studio
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+    networks:
+      - manga-studio-network
+
+  api:
+    build:
+      context: ./server
+      dockerfile: Dockerfile.server
+    image: manga-studio-api:latest
+    container_name: manga-studio-api
+    ports:
+      - "3001:3001"
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=manga_studio
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - manga-studio-network
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: manga-studio:latest
+    container_name: manga-studio-app
+    ports:
+      - "3005:80"
+    environment:
+      - NODE_ENV=production
+    restart: unless-stopped
+    networks:
+      - manga-studio-network
+
+volumes:
+  pgdata:
+
+networks:
+  manga-studio-network:
+    driver: bridge
