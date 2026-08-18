@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { createPortal } from 'react-dom';
 import { STYLES } from './constants';
 
 interface Option {
@@ -58,13 +59,21 @@ const OptionSelector: React.FC<Props> = ({
             onMouseEnter={opt.preview ? (e) => setHovered({ opt, x: e.clientX, y: e.clientY }) : undefined}
             onMouseLeave={opt.preview ? () => setHovered(null) : undefined}
             title={opt.desc}
-            className={`px-${gridCols === 1 ? '3' : '2'} py-2.5 text-[11px] font-medium rounded-md transition-all text-${gridCols === 1 ? 'left' : 'center'} border ${
+            className={`px-${gridCols === 1 ? '3' : '2'} py-2 text-[11px] font-medium rounded-md transition-all text-${gridCols === 1 ? 'left' : 'center'} border flex items-center gap-1.5 ${gridCols === 1 ? '' : 'justify-center'} ${
               value === opt.value
                 ? STYLES.button.selected
                 : `${STYLES.button.secondary} border`
             }`}
           >
-            {opt.label}
+            {opt.preview && (
+              <img
+                src={opt.preview}
+                alt=""
+                className="w-6 h-4 object-cover rounded shrink-0"
+                onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+              />
+            )}
+            <span>{opt.label}</span>
           </button>
         ))}
       </div>
@@ -100,12 +109,12 @@ const OptionSelector: React.FC<Props> = ({
         </div>
       )}
 
-      {/* 悬浮放大预览：鼠标移入风格按钮时，在鼠标附近显示大图 + 名称 + 描述 */}
-      {hovered && hovered.opt.preview && (
+      {/* 悬浮放大预览（Portal 到 body，避免父容器 transform/backdrop-blur 导致 fixed 坐标系错位） */}
+      {hovered && hovered.opt.preview && createPortal(
         <div
-          className="fixed z-[100] pointer-events-none w-56 rounded-xl overflow-hidden border border-cyan-300/30 bg-slate-950/95 backdrop-blur-xl shadow-2xl shadow-cyan-500/20 animate-in fade-in zoom-in-95 duration-150"
+          className="fixed z-[9999] pointer-events-none w-56 rounded-xl overflow-hidden border border-cyan-300/30 bg-slate-950/95 backdrop-blur-xl shadow-2xl shadow-cyan-500/20 animate-in fade-in zoom-in-95 duration-150"
           style={{
-            left: Math.min(hovered.x + 16, (typeof window !== 'undefined' ? window.innerWidth : 1920) - 240),
+            left: Math.max(hovered.x - 240, 8),
             top: Math.max(hovered.y - 8, 8)
           }}
         >
@@ -127,7 +136,8 @@ const OptionSelector: React.FC<Props> = ({
               <div className="text-[10px] text-zinc-400 leading-relaxed">{hovered.opt.desc}</div>
             )}
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );
