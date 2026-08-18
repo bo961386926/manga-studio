@@ -199,6 +199,11 @@ function App() {
   };
 
   const setStage = (stage: 'script' | 'assets' | 'director' | 'export' | 'prompts') => {
+    // 任务进行中时切换页面会提示(任务仍在后台执行,完成后自动保存)
+    if (project?.isParsingScript) {
+      const ok = window.confirm('分镜任务正在后台执行…切换页面后任务仍会继续，完成后自动保存。确定要切换吗？');
+      if (!ok) return;
+    }
     updateProject({ stage });
   };
 

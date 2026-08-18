@@ -26,6 +26,10 @@ export default defineConfig(({ mode }) => {
         },
       },
       plugins: [react()],
+      // @ffmpeg/ffmpeg 的 ESM worker 与 Vite 预构建不兼容，需排除以免 worker 加载失败
+      optimizeDeps: {
+        exclude: ['@ffmpeg/ffmpeg'],
+      },
       define: {
         'process.env.API_KEY': JSON.stringify(env.ANTSK_API_KEY),
         'process.env.ANTSK_API_KEY': JSON.stringify(env.ANTSK_API_KEY)

@@ -3,7 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { ProjectState } from '../../types';
 import { parseScriptToData, generateShotList, continueScript, continueScriptStream, rewriteScript, rewriteScriptStream } from '../../services/geminiService';
 import { getFinalValue, validateConfig } from './utils';
-import { DEFAULTS } from './constants';
+import { DEFAULTS, VISUAL_STYLE_OPTIONS } from './constants';
 import ConfigPanel from './ConfigPanel';
 import ScriptEditor from './ScriptEditor';
 import SceneBreakdown from './SceneBreakdown';
@@ -49,8 +49,36 @@ const StageScript: React.FC<Props> = ({ project, updateProject }) => {
     setLocalDuration(project.targetDuration || DEFAULTS.duration);
     setLocalLanguage(project.language || DEFAULTS.language);
     setLocalModel(project.shotGenerationModel || DEFAULTS.model);
-    setLocalVisualStyle(project.visualStyle || DEFAULTS.visualStyle);
+    // 视觉风格恢复:若为预设选项直接选中;否则视为自定义值,回显到 custom 输入框
+    const vs = project.visualStyle || DEFAULTS.visualStyle;
+    const isPreset = VISUAL_STYLE_OPTIONS.some(o => o.value === vs);
+    if (isPreset) {
+      setLocalVisualStyle(vs);
+      setCustomStyleInput('');
+    } else {
+      setLocalVisualStyle('custom');
+      setCustomStyleInput(vs);
+    }
+    // 恢复任务状态(切页/刷新后):仍在跑则显示处理中,失败则显示错误
+    if (project.isParsingScript) {
+      setIsProcessing(true);
+      setProcessingStep(project.taskStep || '任务正在后台执行...');
+    } else {
+      setIsProcessing(false);
+      setProcessingStep('');
+    }
+    setError(project.taskError || null);
   }, [project.id]);
+
+  // 后台任务完成/失败时同步本组件 UI(处理切页后任务在后台结束、原闭包 setState 失效的情况)
+  useEffect(() => {
+    if (!project.isParsingScript && isProcessing) {
+      setIsProcessing(false);
+      setProcessingStep('');
+      if (project.taskError) setError(project.taskError);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.isParsingScript]);
 
   const handleAnalyze = async () => {
     const finalDuration = getFinalValue(localDuration, customDurationInput);
@@ -80,11 +108,14 @@ const StageScript: React.FC<Props> = ({ project, updateProject }) => {
         language: localLanguage,
         visualStyle: finalVisualStyle,
         shotGenerationModel: finalModel,
-        isParsingScript: true
+        isParsingScript: true,
+        taskStep: '正在解析剧本结构...',
+        taskError: undefined
       });
 
       console.log('[StageScript] 步骤1/3: 解析剧本结构...');
       setProcessingStep('正在解析剧本结构，提取角色与场景...');
+      updateProject({ taskStep: '正在解析剧本结构，提取角色与场景...' });
       const scriptData = await parseScriptToData(localScript, localLanguage, finalModel, finalVisualStyle);
       
       scriptData.targetDuration = finalDuration;
@@ -98,14 +129,18 @@ const StageScript: React.FC<Props> = ({ project, updateProject }) => {
 
       console.log(`[StageScript] 步骤2/3: 为 ${scriptData.scenes.length} 个场景生成分镜...`);
       setProcessingStep(`正在为 ${scriptData.scenes.length} 个场景生成分镜脚本...`);
+      updateProject({ taskStep: `正在为 ${scriptData.scenes.length} 个场景生成分镜脚本...` });
       const shots = await generateShotList(scriptData, finalModel);
 
       console.log(`[StageScript] 步骤3/3: 完成！共 ${shots.length} 个镜位`);
       setProcessingStep('正在保存结果...');
+      updateProject({ taskStep: '正在保存结果...' });
       updateProject({ 
         scriptData, 
         shots, 
         isParsingScript: false,
+        taskStep: undefined,
+        taskError: undefined,
         title: scriptData.title 
       });
       
@@ -113,8 +148,9 @@ const StageScript: React.FC<Props> = ({ project, updateProject }) => {
 
     } catch (err: any) {
       console.error('[StageScript] 生成失败:', err);
-      setError(`错误: ${err.message || "AI 连接失败"}`);
-      updateProject({ isParsingScript: false });
+      const errMsg = `错误: ${err.message || "AI 连接失败"}`;
+      setError(errMsg);
+      updateProject({ isParsingScript: false, taskStep: undefined, taskError: errMsg });
     } finally {
       setIsProcessing(false);
       setProcessingStep('');
@@ -358,10 +394,20 @@ const StageScript: React.FC<Props> = ({ project, updateProject }) => {
             onDurationChange={setLocalDuration}
             onLanguageChange={setLocalLanguage}
             onModelChange={setLocalModel}
-            onVisualStyleChange={setLocalVisualStyle}
+            onVisualStyleChange={(value) => {
+              setLocalVisualStyle(value);
+              // 选择预设时立即保存;切到 custom 时先清空输入回显
+              updateProject({ visualStyle: value === 'custom' ? '' : value });
+            }}
             onCustomDurationChange={setCustomDurationInput}
             onCustomModelChange={setCustomModelInput}
-            onCustomStyleChange={setCustomStyleInput}
+            onCustomStyleChange={(value) => {
+              setCustomStyleInput(value);
+              // 自定义风格输入即时保存,避免切换/刷新丢失
+              if (localVisualStyle === 'custom') {
+                updateProject({ visualStyle: value });
+              }
+            }}
             onAnalyze={handleAnalyze}
           />
           <ScriptEditor

@@ -75,3 +75,9 @@ temp/
 # ⛔ 铁律:推广文档严禁提交(勿删除此规则)
 推广文案.md
 B站短视频执行单.md
+
+# ffmpeg.wasm 核心（npm install 后由 postinstall 自动复制，勿提交 31MB）
+public/ffmpeg/
+
+# pnpm 缓存
+.pnpm-store/

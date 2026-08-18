@@ -3,6 +3,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Film } from 'lucide-react';
 import { ProjectState } from '../../types';
 import { downloadMasterVideo, downloadSourceAssets } from '../../services/exportService';
+import { mergeShotsToSingleMp4 } from '../../services/videoMerger';
 import { STYLES } from './constants';
 import {
   calculateEstimatedDuration,
@@ -36,6 +37,10 @@ const StageExport: React.FC<Props> = ({ project }) => {
   const [isDownloadingAssets, setIsDownloadingAssets] = useState(false);
   const [assetsPhase, setAssetsPhase] = useState('');
   const [assetsProgress, setAssetsProgress] = useState(0);
+
+  const [isMerging, setIsMerging] = useState(false);
+  const [mergePhase, setMergePhase] = useState('');
+  const [mergeProgress, setMergeProgress] = useState(0);
 
   const [showLogsModal, setShowLogsModal] = useState(false);
   const [expandedLogId, setExpandedLogId] = useState<string | null>(null);
@@ -102,8 +107,17 @@ const StageExport: React.FC<Props> = ({ project }) => {
   };
 
   const handleDownloadMaster = async () => {
-    if (isDownloading || progress < 100) return;
-    
+    if (isDownloading) return;
+    if (completedShots.length === 0) {
+      showAlert('还没有已渲染的视频片段，请先生成镜头视频。', { type: 'warning' });
+      return;
+    }
+
+    // 部分导出提示:未全部渲染完成时告知用户导出的是已完成片段
+    if (progress < 100) {
+      showAlert(`当前已完成 ${completedShots.length}/${project.shots.length} 个镜头，将导出已渲染的部分。`, { type: 'info', title: '部分导出' });
+    }
+
     setIsDownloading(true);
     setDownloadProgress(0);
     
@@ -124,6 +138,33 @@ const StageExport: React.FC<Props> = ({ project }) => {
       setIsDownloading(false);
       setDownloadPhase('');
       setDownloadProgress(0);
+    }
+  };
+
+  const handleMergeToMp4 = async () => {
+    if (isMerging || completedShots.length === 0) return;
+    setIsMerging(true);
+    setMergeProgress(0);
+    try {
+      await mergeShotsToSingleMp4(
+        project.shots,
+        project.scriptData?.title || project.title,
+        (phase, prog) => {
+          setMergePhase(phase);
+          setMergeProgress(prog);
+        }
+      );
+      setTimeout(() => {
+        setIsMerging(false);
+        setMergePhase('');
+        setMergeProgress(0);
+      }, 2000);
+    } catch (error) {
+      console.error('合并失败:', error);
+      showAlert(`合并失败: ${error instanceof Error ? error.message : '未知错误'}`, { type: 'error' });
+      setIsMerging(false);
+      setMergePhase('');
+      setMergeProgress(0);
     }
   };
 
@@ -199,6 +240,43 @@ const StageExport: React.FC<Props> = ({ project }) => {
               onPreview={openVideoPlayer}
               onDownloadMaster={handleDownloadMaster}
             />
+
+            {/* 合并为单个 MP4（ffmpeg.wasm 浏览器端合并） */}
+            <div className="mt-4 p-4 bg-white/[0.025] border border-white/10 rounded-2xl">
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <div className="text-sm font-bold text-white">合并为单个 MP4</div>
+                  <div className="text-[10px] text-zinc-500 mt-0.5">
+                    把已渲染的 {completedShots.length} 个片段合并成一个长视频
+                  </div>
+                </div>
+                <button
+                  onClick={handleMergeToMp4}
+                  disabled={completedShots.length === 0 || isMerging}
+                  className={`px-4 py-2 text-xs font-bold rounded-xl flex items-center gap-2 transition-all ${
+                    completedShots.length === 0 || isMerging
+                      ? 'bg-white/[0.05] text-slate-500 cursor-not-allowed border border-white/10'
+                      : 'bg-gradient-to-r from-emerald-400 to-teal-500 text-slate-950 hover:from-emerald-300 hover:to-teal-400 shadow-lg shadow-emerald-500/20'
+                  }`}
+                >
+                  {isMerging ? '合并中...' : '合并导出 MP4'}
+                </button>
+              </div>
+              {isMerging && (
+                <div className="space-y-1">
+                  <div className="flex justify-between text-[10px] text-zinc-400 font-mono">
+                    <span>{mergePhase}</span>
+                    <span>{mergeProgress}%</span>
+                  </div>
+                  <div className="h-1.5 bg-white/5 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-gradient-to-r from-emerald-400 to-teal-500 transition-all duration-300"
+                      style={{ width: `${mergeProgress}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
 
           <SecondaryOptions

@@ -121,6 +121,10 @@ export interface ProjectState {
   scriptData: ScriptData | null;
   shots: Shot[];
   isParsingScript: boolean;
+  /** 任务进行中的步骤描述(持久化到项目,切页/刷新后恢复显示) */
+  taskStep?: string;
+  /** 任务失败信息(持久化,切页后恢复显示) */
+  taskError?: string;
   renderLogs: RenderLog[];
 }
 
