@@ -4,7 +4,7 @@ export type AspectRatio = '16:9' | '9:16' | '1:1';
 
 export type VideoDuration = 4 | 8 | 12;
 
-export type VideoMode = 'sync' | 'async' | 'doubao' | 'qwen';
+export type VideoMode = 'sync' | 'async' | 'doubao' | 'qwen' | 'h3';
 
 export interface ChatModelParams {
   temperature: number;
@@ -79,6 +79,8 @@ export interface ModelRegistryState {
   models: ModelDefinition[];
   activeModels: ActiveModels;
   globalApiKey?: string;
+  /** API Key 使用模式：'global'=所有模型统一用全局 Key；'mixed'=模型/服务商各自 Key 优先，全局兜底 */
+  keyMode?: 'global' | 'mixed';
 }
 
 export interface ChatOptions {
@@ -171,6 +173,18 @@ export const BUILTIN_CHAT_MODELS: ChatModelDefinition[] = [
     isEnabled: true,
     params: { ...DEFAULT_CHAT_PARAMS },
   },
+  {
+    id: 'minimax-text',
+    name: 'MiniMax Text-01',
+    type: 'chat',
+    providerId: 'minimax',
+    apiModel: 'MiniMax-Text-01',
+    endpoint: '/chat/completions',
+    description: 'MiniMax 文本模型（OpenAI 兼容接口），适合剧本拆解与分镜规划',
+    isBuiltIn: true,
+    isEnabled: true,
+    params: { ...DEFAULT_CHAT_PARAMS },
+  },
 ];
 
 export const BUILTIN_IMAGE_MODELS: ImageModelDefinition[] = [
@@ -192,6 +206,18 @@ export const BUILTIN_IMAGE_MODELS: ImageModelDefinition[] = [
     providerId: 'aliyun',
     endpoint: '/services/aigc/image-generation/generation',
     description: '阿里云通义万相图像生成模型',
+    isBuiltIn: true,
+    isEnabled: true,
+    params: { ...DEFAULT_IMAGE_PARAMS },
+  },
+  {
+    id: 'minimax-image',
+    name: 'MiniMax 图像 (image-01)',
+    type: 'image',
+    providerId: 'minimax',
+    apiModel: 'image-01',
+    endpoint: '/image_generation',
+    description: 'MiniMax 文生图模型,支持 8 种画面比例',
     isBuiltIn: true,
     isEnabled: true,
     params: { ...DEFAULT_IMAGE_PARAMS },
@@ -227,6 +253,24 @@ export const BUILTIN_VIDEO_MODELS: VideoModelDefinition[] = [
       supportedDurations: [8],
     },
   },
+  {
+    id: 'minimax-h3',
+    name: 'MiniMax H3 (海螺 3.0)',
+    type: 'video',
+    providerId: 'minimax',
+    apiModel: 'MiniMax-H3',
+    endpoint: '/video_generation',
+    description: 'MiniMax 海螺 3.0：文生视频/图生视频，运动与一致性增强，支持原生音频',
+    isBuiltIn: true,
+    isEnabled: true,
+    params: {
+      mode: 'h3',
+      defaultAspectRatio: '16:9',
+      supportedAspectRatios: ['16:9', '9:16', '1:1'],
+      defaultDuration: 8,
+      supportedDurations: [4, 8, 12],
+    },
+  },
 ];
 
 export const BUILTIN_PROVIDERS: ModelProvider[] = [
@@ -248,6 +292,13 @@ export const BUILTIN_PROVIDERS: ModelProvider[] = [
     id: 'volcengine',
     name: '火山引擎 (Volcengine)',
     baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+    isBuiltIn: true,
+    isDefault: false,
+  },
+  {
+    id: 'minimax',
+    name: 'MiniMax (海螺)',
+    baseUrl: 'https://api.minimaxi.com/v1',
     isBuiltIn: true,
     isDefault: false,
   },

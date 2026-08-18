@@ -68,3 +68,6 @@ temp/
 .worktrees/
 *.tmp
 *.bak
+
+# Playwright CLI snapshots
+.playwright-cli/

@@ -28,6 +28,7 @@ const getDefaultState = (): ModelRegistryState => ({
   models: [...ALL_BUILTIN_MODELS],
   activeModels: { ...DEFAULT_ACTIVE_MODELS },
   globalApiKey: undefined,
+  keyMode: 'mixed',
 });
 
 /**
@@ -468,10 +469,44 @@ export const setGlobalApiKey = (apiKey: string): void => {
 };
 
 /**
+ * 获取 API Key 使用模式（'global' | 'mixed'）
+ */
+export const getKeyMode = (): 'global' | 'mixed' => {
+  return loadRegistry().keyMode || 'mixed';
+};
+
+/**
+ * 设置 API Key 使用模式
+ * - 'global': 所有模型统一使用全局 API Key（各服务商/模型专属 Key 不生效）
+ * - 'mixed': 模型专属 Key > 提供商 Key > 其他提供商 Key > 全局 Key（兜底）
+ */
+export const setKeyMode = (mode: 'global' | 'mixed'): void => {
+  const state = loadRegistry();
+  state.keyMode = mode;
+  saveRegistry(state);
+};
+
+/**
  * 获取模型对应的 API Key
- * 优先级：模型专属 Key > 提供商 Key > 其他提供商 Key > 全局 Key
+ * - 全局模式：强制使用全局 API Key
+ * - 混合模式：优先级 模型专属 Key > 提供商 Key > 其他提供商 Key > 全局 Key
  */
 export const getApiKeyForModel = (modelId: string): string | undefined => {
+  const state = loadRegistry();
+
+  // 全局模式：所有模型统一使用同一个 Key（全局 Key 优先，未配置时取第一个有 Key 的服务商）
+  if (state.keyMode === 'global') {
+    if (state.globalApiKey) {
+      console.log(`[ApiKey] Global mode: using global API key`);
+      return state.globalApiKey;
+    }
+    const firstProviderKey = state.providers.find(p => p.apiKey)?.apiKey;
+    if (firstProviderKey) {
+      console.log(`[ApiKey] Global mode: fallback to first provider key`);
+    }
+    return firstProviderKey;
+  }
+
   const model = getModelById(modelId);
   
   // 1. 优先使用模型专属 API Key

@@ -238,6 +238,7 @@ const cleanJsonString = (str: string): string => {
 const chatCompletion = async (prompt: string, model: string = 'gpt-5.1', temperature: number = 0.7, maxTokens: number = 8192, responseFormat?: 'json_object', timeout: number = 600000): Promise<string> => {
   const apiKey = checkApiKey('chat', model);
   const requestModel = resolveRequestModel('chat', model);
+  const resolvedModel = resolveModel('chat', model);
   
   const requestBody: any = {
     model: requestModel,
@@ -246,7 +247,8 @@ const chatCompletion = async (prompt: string, model: string = 'gpt-5.1', tempera
     max_tokens: maxTokens
   };
   
-  if (responseFormat === 'json_object') {
+  // MiniMax OpenAI 兼容接口不支持 response_format 参数，依赖提示词输出 JSON
+  if (responseFormat === 'json_object' && resolvedModel?.providerId !== 'minimax') {
     requestBody.response_format = { type: 'json_object' };
   }
   
@@ -255,7 +257,6 @@ const chatCompletion = async (prompt: string, model: string = 'gpt-5.1', tempera
   
   try {
     const apiBase = getApiBase('chat', model);
-    const resolvedModel = resolveModel('chat', model);
     const endpoint = resolvedModel?.endpoint || '/v1/chat/completions';
     const fullUrl = `${apiBase}${endpoint}`;
     console.log(`[API Request] Chat - Model: ${requestModel}, URL: ${fullUrl}`);
@@ -279,6 +280,10 @@ const chatCompletion = async (prompt: string, model: string = 'gpt-5.1', tempera
       }
     } catch (_) {
       if (raw) errorMessage = raw;
+    }
+    // MiniMax 余额不足(1008)等错误的中文友好提示
+    if (errorMessage.includes('insufficient balance') || errorMessage.includes('1008')) {
+      errorMessage = 'MiniMax 账户余额不足 (1008)：请前往 MiniMax 开放平台充值或领取免费额度后重试';
     }
     throw new Error(errorMessage);
   }
@@ -315,6 +320,7 @@ const chatCompletionStream = async (
 ): Promise<string> => {
   const apiKey = checkApiKey('chat', model);
   const requestModel = resolveRequestModel('chat', model);
+  const resolvedModel = resolveModel('chat', model);
   const requestBody: any = {
     model: requestModel,
     messages: [{ role: 'user', content: prompt }],
@@ -322,7 +328,8 @@ const chatCompletionStream = async (
     stream: true
   };
 
-  if (responseFormat === 'json_object') {
+  // MiniMax OpenAI 兼容接口不支持 response_format 参数，依赖提示词输出 JSON
+  if (responseFormat === 'json_object' && resolvedModel?.providerId !== 'minimax') {
     requestBody.response_format = { type: 'json_object' };
   }
 
@@ -331,7 +338,6 @@ const chatCompletionStream = async (
 
   try {
     const apiBase = getApiBase('chat', model);
-    const resolvedModel = resolveModel('chat', model);
     const endpoint = resolvedModel?.endpoint || '/v1/chat/completions';
     const response = await proxyFetch(`${apiBase}${endpoint}`, {
       method: 'POST',
@@ -353,6 +359,10 @@ const chatCompletionStream = async (
         }
       } catch (_) {
         if (raw) errorMessage = raw;
+      }
+      // MiniMax 余额不足(1008)等错误的中文友好提示
+      if (errorMessage.includes('insufficient balance') || errorMessage.includes('1008')) {
+        errorMessage = 'MiniMax 账户余额不足 (1008)：请前往 MiniMax 开放平台充值或领取免费额度后重试';
       }
       throw new Error(errorMessage);
     }
@@ -1077,6 +1087,23 @@ export const generateImage = async (
       n: 1,
       size: aspectRatio === '16:9' ? '2560x1440' : (aspectRatio === '9:16' ? '1440x2560' : '2048x2048')
     };
+  } else if (activeImageModel?.providerId === 'minimax' || imageModelId.includes('minimax')) {
+    // MiniMax 文生图格式 (image-01)：返回 URL 后由前端下载转 base64 存储（URL 24 小时过期）
+    // prompt 上限 1500 字符：超长时保留开头核心描述(1150) + 结尾风格/镜头标签(300)，避免 2013 错误
+    let miniMaxPrompt = finalPrompt;
+    if (miniMaxPrompt.length > 1450) {
+      console.warn(`[ImageGen] MiniMax prompt 过长 (${miniMaxPrompt.length} 字符),已截断至 1450`);
+      miniMaxPrompt =
+        miniMaxPrompt.substring(0, 1150) + '\n...\n' + miniMaxPrompt.substring(miniMaxPrompt.length - 300);
+    }
+    requestBody = {
+      model: imageModelId,
+      prompt: miniMaxPrompt,
+      n: 1,
+      aspect_ratio: aspectRatio,
+      response_format: 'url',
+      prompt_optimizer: false,
+    };
   } else {
     // 默认 OpenAI 格式
     requestBody = {
@@ -1198,6 +1225,34 @@ export const generateImage = async (
       duration: Date.now() - startTime
     });
     return result;
+  } else if (response.data && Array.isArray(response.data.image_urls) && response.data.image_urls.length > 0) {
+    // MiniMax 文生图格式:data.image_urls[]（URL 24 小时过期,下载转 base64 存储）
+    const url = response.data.image_urls[0];
+    addRenderLogWithTokens({
+      type: 'keyframe',
+      resourceId: 'image-' + Date.now(),
+      resourceName: prompt.substring(0, 50) + '...',
+      status: 'success',
+      model: imageModelId,
+      prompt: prompt,
+      duration: Date.now() - startTime
+    });
+    const dataUrl = await convertVideoUrlToBase64(url);
+    return dataUrl;
+  } else if (activeImageModel?.providerId === 'minimax' || imageModelId.includes('minimax')) {
+    // MiniMax 生图失败诊断:metadata.failed_count / base_resp / error
+    console.error('[ImageGen] MiniMax 生图失败,完整响应:', JSON.stringify(response));
+    const failedCount = response.metadata?.failed_count;
+    const statusCode = response.base_resp?.status_code;
+    const statusMsg = response.base_resp?.status_msg;
+    const respError = response.error?.message || response.message;
+    if (statusCode !== undefined && statusCode !== 0) {
+      throw new Error(`MiniMax 图片生成失败 (${statusCode})：${statusMsg || respError || '请稍后重试'}`);
+    }
+    if (failedCount) {
+      throw new Error(`MiniMax 图片生成失败：内容安全拦截或生成被拒绝（成功 ${response.metadata?.success_count ?? 0} / 失败 ${failedCount}），请调整提示词后重试`);
+    }
+    throw new Error(`MiniMax 图片生成失败：未返回图片数据${statusMsg ? `（${statusMsg}）` : ''}，请重试或更换提示词`);
   } else if (response.data && response.data.length > 0) {
     // OpenAI 图像生成格式
     const result = response.data[0].url || response.data[0].b64_json;
@@ -1881,6 +1936,129 @@ const generateVideoWithDoubao = async (
 };
 
 /**
+ * MiniMax H3 (海螺 3.0) 视频生成 - 官方 v2 异步任务 API
+ * 创建: POST {v2}/video_generation  →  轮询: GET {v2}/query/video_generation/{task_id}
+ * 支持文生视频、图生视频(首帧 first_frame),成功时从 task.content.url 取视频直链
+ */
+const resolveMiniMaxV2BaseURL = (baseURL: string): string => {
+  const normalized = (baseURL || 'https://api.minimaxi.com/v1').replace(/\/+$/, '');
+  if (normalized.endsWith('/v2')) return normalized;
+  if (normalized.endsWith('/v1')) return `${normalized.slice(0, -3)}/v2`;
+  return `${normalized}/v2`;
+};
+
+const generateVideoWithMiniMaxH3 = async (
+  prompt: string,
+  startImageBase64: string | undefined,
+  apiKey: string,
+  aspectRatio: AspectRatio = '16:9',
+  duration: VideoDuration = 8,
+  modelName: string = 'MiniMax-H3',
+  apiBase: string
+): Promise<string> => {
+  console.log(`🎬 使用 MiniMax H3 生成视频 (${modelName}, ${aspectRatio}, ${duration}秒)...`);
+
+  const v2Base = resolveMiniMaxV2BaseURL(apiBase);
+
+  // 构造 content:文本 + 可选首帧(项目当前只传起始帧;H3 亦支持尾帧/参考图,后续可扩展)
+  const content: any[] = [{ type: 'text', text: prompt }];
+
+  const toH3ImageUrl = (img: string | undefined): string | undefined => {
+    if (!img) return undefined;
+    if (img.startsWith('http://') || img.startsWith('https://')) return img;
+    const clean = img.replace(/^data:image\/(png|jpeg|jpg|webp);base64,/, '');
+    return `data:image/png;base64,${clean}`;
+  };
+
+  const firstFrame = toH3ImageUrl(startImageBase64);
+  if (firstFrame) {
+    content.push({ type: 'image_url', role: 'first_frame', image_url: { url: firstFrame } });
+  }
+
+  const body: any = {
+    model: modelName,
+    content,
+    // 图生视频时用 adaptive,由模型自适应比例;纯文生视频用指定比例
+    ratio: firstFrame ? 'adaptive' : aspectRatio,
+    duration,
+    resolution: '768P',
+    aigc_watermark: false,
+  };
+
+  // Step 1: 创建视频任务
+  const createResponse = await proxyFetch(`${v2Base}/video_generation`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!createResponse.ok) {
+    const errorText = await createResponse.text();
+    throw new Error(`MiniMax H3 创建任务失败: HTTP ${createResponse.status} ${errorText.slice(0, 300)}`);
+  }
+
+  const createData = await createResponse.json();
+  const taskId = createData.task_id;
+  if (!taskId) {
+    throw new Error('MiniMax H3 创建任务失败：未返回 task_id');
+  }
+
+  console.log('📋 MiniMax H3 任务已创建，任务ID:', taskId);
+
+  // Step 2: 轮询查询任务状态
+  const maxPollingTime = 1200000; // 20 分钟超时
+  const pollingInterval = 5000; // 每 5 秒查询一次
+  const startTime = Date.now();
+
+  while (Date.now() - startTime < maxPollingTime) {
+    await new Promise(resolve => setTimeout(resolve, pollingInterval));
+
+    const statusResponse = await proxyFetch(`${v2Base}/query/video_generation/${encodeURIComponent(taskId)}`, {
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+    });
+
+    if (!statusResponse.ok) {
+      console.warn('⚠️ MiniMax H3 查询任务状态失败，继续重试...');
+      continue;
+    }
+
+    const statusData = await statusResponse.json();
+    const task = statusData.task;
+    if (!task) {
+      console.warn('⚠️ MiniMax H3 状态响应缺少 task 字段，继续重试...');
+      continue;
+    }
+
+    const status = task.status;
+    console.log('🔄 MiniMax H3 任务状态:', status);
+
+    if (status === 'succeeded') {
+      const videoUrl = task.content?.url;
+      if (!videoUrl) {
+        throw new Error('MiniMax H3 生成成功但未返回视频 URL');
+      }
+      console.log('✅ MiniMax H3 生成完成，下载视频...');
+      const videoBase64 = await convertVideoUrlToBase64(videoUrl);
+      console.log('✅ MiniMax H3 视频已转换为 base64');
+      return videoBase64;
+    } else if (status === 'failed' || status === 'expired') {
+      const taskError = typeof task.error === 'string' ? task.error : (task.error?.message || task.message);
+      throw new Error(`MiniMax H3 视频生成失败: ${taskError || status}`);
+    }
+    // queued / running 继续轮询
+  }
+
+  throw new Error('MiniMax H3 视频生成超时 (20分钟)');
+};
+
+/**
  * 生成视频(Agent 8)
  * 使用antsk视频生成API (veo_3_1 或 sora-2)
  * 通过起始帧和结束帧生成视频片段
@@ -1910,6 +2088,7 @@ export const generateVideo = async (
   const isAsyncMode = (resolvedVideoModel?.params as any)?.mode === 'async' || requestModel === 'sora-2';
   const isQwenMode = (resolvedVideoModel?.params as any)?.mode === 'qwen';
   const isDoubaoMode = (resolvedVideoModel?.params as any)?.mode === 'doubao';
+  const isH3Mode = (resolvedVideoModel?.params as any)?.mode === 'h3';
   
   // sora-2 使用异步API模式
   if (isAsyncMode) {
@@ -1926,6 +2105,12 @@ export const generateVideo = async (
   if (isDoubaoMode) {
     console.log(`🎬 使用豆包视频生成模型 (${requestModel}, ${aspectRatio}, ${duration}秒)`);
     return generateVideoWithDoubao(prompt, startImageBase64, apiKey, apiBase, aspectRatio, duration, requestModel, resolvedVideoModel?.endpoint);
+  }
+
+  // MiniMax H3 使用官方 v2 异步任务 API
+  if (isH3Mode) {
+    console.log(`🎬 使用 MiniMax H3 视频生成模型 (${requestModel}, ${aspectRatio}, ${duration}秒)`);
+    return generateVideoWithMiniMaxH3(prompt, startImageBase64, apiKey, aspectRatio, duration, requestModel || 'MiniMax-H3', apiBase);
   }
   
   // 如果是 veo 模型，根据横竖屏和是否有参考图动态选择模型名称

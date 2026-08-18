@@ -93,7 +93,10 @@ export const callChatApi = async (
   }
   
   if (options.responseFormat === 'json') {
-    requestBody.response_format = { type: 'json_object' };
+    // MiniMax OpenAI 兼容接口不支持 response_format 参数，依赖提示词输出 JSON
+    if (activeModel.providerId !== 'minimax') {
+      requestBody.response_format = { type: 'json_object' };
+    }
   }
   
   const timeout = options.timeout || 600000;
@@ -120,6 +123,10 @@ export const callChatApi = async (
         } catch (e) {
           const errorText = await res.text();
           if (errorText) errorMessage = errorText;
+        }
+        // MiniMax 余额不足(1008)等错误的中文友好提示
+        if (errorMessage.includes('insufficient balance') || errorMessage.includes('1008')) {
+          errorMessage = 'MiniMax 账户余额不足 (1008)：请前往 MiniMax 开放平台充值或领取免费额度后重试';
         }
         throw new Error(errorMessage);
       }

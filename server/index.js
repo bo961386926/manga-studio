@@ -279,6 +279,16 @@ app.post('/api/ai-forward', async (req, res) => {
       console.log(`[Backend API] Entering non-stream body retrieval...`);
       const arrayBuffer = await fetchRes.arrayBuffer();
       console.log(`[Backend API] Retrieved body bytes length: ${arrayBuffer.byteLength}`);
+      // 诊断日志:JSON 小响应打印内容(图片/视频等二进制不打印),便于排查上游返回
+      const ct = (contentType || '').toLowerCase();
+      if (ct.includes('application/json') || ct.includes('text/plain')) {
+        const bodyText = Buffer.from(arrayBuffer).toString('utf-8');
+        if (arrayBuffer.byteLength < 4096) {
+          console.log(`[Backend API] Response body: ${bodyText}`);
+        } else {
+          console.log(`[Backend API] Response body (first 1500): ${bodyText.substring(0, 1500)}`);
+        }
+      }
       if (!res.writableEnded) {
         res.send(Buffer.from(arrayBuffer));
         console.log(`[Backend API] Sent non-stream response successfully`);

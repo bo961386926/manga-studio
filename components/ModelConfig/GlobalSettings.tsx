@@ -4,8 +4,8 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { Key, Loader2, CheckCircle, AlertCircle, ExternalLink, Server, Shield } from 'lucide-react';
-import { getProviders, updateProvider, getGlobalApiKey, setGlobalApiKey } from '../../services/modelRegistry';
+import { Loader2, CheckCircle, AlertCircle, ExternalLink, Server, Shield, Layers } from 'lucide-react';
+import { getProviders, updateProvider, setGlobalApiKey, getKeyMode, setKeyMode } from '../../services/modelRegistry';
 
 interface GlobalSettingsProps {
   onRefresh: () => void;
@@ -22,26 +22,17 @@ const PROVIDER_LINKS: Record<string, { label: string; url: string; color: string
   aliyun: { label: '获取阿里云 Key', url: 'https://bailian.console.aliyun.com/', color: 'from-orange-400 to-red-500' },
   deepseek: { label: '获取 DeepSeek Key', url: 'https://platform.deepseek.com/', color: 'from-blue-400 to-indigo-500' },
   volcengine: { label: '获取火山引擎 Key', url: 'https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey', color: 'from-purple-400 to-pink-500' },
+  minimax: { label: '获取 MiniMax Key', url: 'https://platform.minimaxi.com/', color: 'from-emerald-400 to-teal-500' },
 };
 
 const GlobalSettings: React.FC<GlobalSettingsProps> = ({ onRefresh }) => {
-  const [globalKey, setGlobalKey] = useState('');
-  const [globalStatus, setGlobalStatus] = useState<'idle' | 'success' | 'error'>('idle');
-  const [globalMessage, setGlobalMessage] = useState('');
   const [providers, setProviders] = useState<Array<{ id: string; name: string; baseUrl: string; apiKey?: string; isBuiltIn: boolean }>>([]);
   const [providerKeys, setProviderKeys] = useState<Record<string, ProviderKeyState>>({});
-  const [restoreStatus, setRestoreStatus] = useState<'idle' | 'restored' | 'empty'>('idle');
+  const [keyMode, setKeyModeState] = useState<'global' | 'mixed'>('mixed');
 
   useEffect(() => {
-    const currentGlobalKey = getGlobalApiKey() || '';
-    setGlobalKey(currentGlobalKey);
-    if (currentGlobalKey) {
-      setGlobalStatus('success');
-      setGlobalMessage('全局 API Key 已配置（备用）');
-      setRestoreStatus('restored');
-    } else {
-      setRestoreStatus('empty');
-    }
+    // 加载 Key 使用模式
+    setKeyModeState(getKeyMode());
     
     // 加载所有提供商
     const allProviders = getProviders();
@@ -61,23 +52,9 @@ const GlobalSettings: React.FC<GlobalSettingsProps> = ({ onRefresh }) => {
     setProviderKeys(keys);
   }, []);
 
-  const handleSaveGlobalKey = () => {
-    if (!globalKey.trim()) {
-      setGlobalStatus('error');
-      setGlobalMessage('请输入 API Key');
-      return;
-    }
-    setGlobalApiKey(globalKey.trim());
-    setGlobalStatus('success');
-    setGlobalMessage('全局 API Key 已保存');
-    onRefresh();
-  };
-
-  const handleClearGlobalKey = () => {
-    setGlobalKey('');
-    setGlobalStatus('idle');
-    setGlobalMessage('');
-    setGlobalApiKey('');
+  const handleSetMode = (mode: 'global' | 'mixed') => {
+    setKeyModeState(mode);
+    setKeyMode(mode);
     onRefresh();
   };
 
@@ -120,8 +97,44 @@ const GlobalSettings: React.FC<GlobalSettingsProps> = ({ onRefresh }) => {
 
   return (
     <div className="space-y-6">
-      <div className={`rounded-2xl border px-4 py-3 text-sm ${restoreStatus === 'restored' ? 'border-emerald-400/30 bg-emerald-400/10 text-emerald-300' : 'border-amber-400/30 bg-amber-400/10 text-amber-300'}`}>
-        {restoreStatus === 'restored' ? '已恢复上次保存的 API Key。你现在可以直接继续使用。' : '当前还没有恢复到已保存的 API Key；如需要请在下方重新保存。'}
+      {/* API Key 使用模式 */}
+      <div>
+        <div className="flex items-center gap-2 mb-3">
+          <Layers className="w-4 h-4 text-cyan-300" />
+          <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">
+            API Key 使用模式
+          </label>
+        </div>
+
+        <div className="bg-white/[0.045] border border-white/10 rounded-2xl p-4">
+          <div className="flex gap-2">
+            <button
+              onClick={() => handleSetMode('global')}
+              className={`flex-1 px-4 py-3 text-xs font-bold rounded-xl border transition-colors ${
+                keyMode === 'global'
+                  ? 'bg-cyan-300/20 border-cyan-200/40 text-cyan-200'
+                  : 'border-white/10 text-zinc-400 hover:text-white hover:bg-white/5'
+              }`}
+            >
+              全局模式
+            </button>
+            <button
+              onClick={() => handleSetMode('mixed')}
+              className={`flex-1 px-4 py-3 text-xs font-bold rounded-xl border transition-colors ${
+                keyMode === 'mixed'
+                  ? 'bg-cyan-300/20 border-cyan-200/40 text-cyan-200'
+                  : 'border-white/10 text-zinc-400 hover:text-white hover:bg-white/5'
+              }`}
+            >
+              混合模式
+            </button>
+          </div>
+          <p className="text-[10px] text-zinc-500 mt-2 leading-relaxed">
+            {keyMode === 'global'
+              ? '所有模型统一使用同一个 API Key（取第一个已配置的服务商 Key）。适合只用一个服务商 Key 的场景。'
+              : '各服务商可单独配置 Key（优先使用），未配置时回退到其他已配置的 Key。适合混合使用多个服务商的场景。'}
+          </p>
+        </div>
       </div>
 
       {/* 各服务商 API Key 配置 */}
@@ -209,66 +222,6 @@ const GlobalSettings: React.FC<GlobalSettingsProps> = ({ onRefresh }) => {
               </div>
             );
           })}
-        </div>
-      </div>
-
-      {/* 全局 API Key（备用） */}
-      <div>
-        <div className="flex items-center gap-2 mb-3">
-          <Key className="w-4 h-4 text-zinc-500" />
-          <label className="text-[10px] font-bold text-zinc-600 uppercase tracking-widest">
-            全局 API Key（备用）
-          </label>
-        </div>
-        
-        <div className="bg-white/[0.025] border border-white/5 rounded-2xl p-4">
-          <p className="text-[10px] text-zinc-600 mb-3 leading-relaxed">
-            当服务商未单独设置 API Key 时，将使用此全局 Key 作为备用。
-          </p>
-          
-          <div className="space-y-3">
-            <input
-              type="password"
-              value={globalKey}
-              onChange={(e) => {
-                setGlobalKey(e.target.value);
-                setGlobalStatus('idle');
-                setGlobalMessage('');
-              }}
-              placeholder="输入备用 API Key（可选）..."
-              className="w-full bg-white/[0.06] border border-white/10 text-white px-4 py-3 text-sm rounded-xl focus:border-cyan-300/40 focus:outline-none focus:ring-2 focus:ring-cyan-300/10 transition-all font-mono placeholder:text-slate-500"
-            />
-            
-            {globalMessage && (
-              <div className={`flex items-center gap-2 text-xs ${
-                globalStatus === 'success' ? 'text-green-400' : 'text-red-400'
-              }`}>
-                {globalStatus === 'success' ? (
-                  <CheckCircle className="w-3.5 h-3.5" />
-                ) : (
-                  <AlertCircle className="w-3.5 h-3.5" />
-                )}
-                {globalMessage}
-              </div>
-            )}
-
-            <div className="flex gap-3">
-              <button
-                onClick={handleSaveGlobalKey}
-                className="px-4 py-2 bg-cyan-300/20 border border-cyan-200/30 text-cyan-300 text-xs rounded-xl hover:bg-cyan-300/30 transition-colors"
-              >
-                保存全局 Key
-              </button>
-              {globalStatus === 'success' && (
-                <button
-                  onClick={handleClearGlobalKey}
-                  className="px-4 py-2 text-zinc-500 hover:text-red-400 text-xs rounded-xl hover:bg-red-500/10 transition-colors"
-                >
-                  清除
-                </button>
-              )}
-            </div>
-          </div>
         </div>
       </div>
     </div>
