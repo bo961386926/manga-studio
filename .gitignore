@@ -71,3 +71,7 @@ temp/
 
 # Playwright CLI snapshots
 .playwright-cli/
+
+# ⛔ 铁律:推广文档严禁提交(勿删除此规则)
+推广文案.md
+B站短视频执行单.md
