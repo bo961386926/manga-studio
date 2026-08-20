@@ -317,9 +317,11 @@ CREATE TABLE model_invocations (
   result_text_ciphertext BYTEA,
   result_text_iv BYTEA,
   result_text_tag BYTEA,
+  result_text_key_id VARCHAR(64),
   result_json_ciphertext BYTEA,
   result_json_iv BYTEA,
   result_json_tag BYTEA,
+  result_json_key_id VARCHAR(64),
   error_code VARCHAR(64),
   error_message VARCHAR(500),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -328,7 +330,7 @@ CREATE TABLE model_invocations (
 );
 ```
 
-`request_hash` 使用部署秘密 HMAC，而不是可字典枚举提示词的裸 SHA-256。所有收费调用（包括 chat 和 test）都必须要求 `Idempotency-Key`，并在向上游发出前落库 invocation；Chat/Test 的小结果使用 AEAD 加密字段保存，图片/视频保存 MediaRef。响应丢失后的相同 key 读取原结果，不重复收费。上游成功但进程在结果落库前崩溃时进入 `submission_uncertain`，无上游幂等查询不得自动重提。异步 `model_jobs` 一对一引用 invocation；test 调用也使用相同机制。
+`request_hash` 使用部署秘密 HMAC，而不是可字典枚举提示词的裸 SHA-256。所有收费调用（包括 chat 和 test）都必须要求 `Idempotency-Key`，并在向上游发出前落库 invocation；Chat/Test 的小结果使用 AEAD 加密字段保存，图片/视频保存 MediaRef。每个非空结果字段必须同时保存对应的 `*_key_id`；其 AAD 固定绑定 invocation、user、model、operation、结果字段名和 key ID，轮换后按显式 key ID 选择当前或受支持的旧密钥，不能遍历密钥或静默回退。响应丢失后的相同 key 读取原结果，不重复收费。上游成功但进程在结果落库前崩溃时进入 `submission_uncertain`，无上游幂等查询不得自动重提。异步 `model_jobs` 一对一引用 invocation；test 调用也使用相同机制。
 
 ## 6. 凭证所有权与加密
 
@@ -659,7 +661,7 @@ GET/PATCH/DELETE /api/admin/shared-models/{modelId}
 - API 在该部署完成一次导入或管理员明确跳过后永久关闭；
 - 普通用户不能使用该迁移入口。
 
-迁移包使用独立 AEAD 密钥和版本化格式，仅允许这三个已知配置 key、项目内媒体/模型引用摘要和必要凭证；导出文件由用户自行保管，导入成功后服务端和客户端都擦除临时副本。桥接版本的导出、远端版本的导入和失败恢复分别有端到端测试。
+迁移包使用独立、版本化的 AEAD envelope，仅允许这三个已知配置 key、项目内媒体/模型引用摘要和必要凭证。v1 envelope 至少包含 `format_version`、`kdf`（推荐 Argon2id 参数 `salt`、`memory_kib`、`iterations`、`parallelism`）、`nonce`、`ciphertext`、`tag` 和 `aad_context`；明文不含解密密钥。桥接版本导出时由管理员设置一次性迁移口令（不复用登录密码），口令只用于本地 Argon2id 派生包密钥，参数随 envelope 保存；导入时管理员在远端向导中再次输入口令，服务端仅在内存中解密并立即擦除口令/明文。若部署不允许口令输入，则改用一次性恢复密钥：导出端仅显示一次，用户通过独立安全渠道输入远端向导，恢复密钥绝不与文件同包。AAD 绑定部署迁移 ID、导出用户、格式版本和固定用途字符串；版本、KDF、tag 或 AAD 校验失败时拒绝导入并删除内存明文，不覆盖现有配置。导出文件由用户自行保管，导入成功后服务端和客户端都擦除临时副本。桥接版本的导出、远端版本的导入、错误口令、密钥丢失和失败恢复分别有端到端测试。
 
 迁移报告逐项列出旧 ID、新 UUID、scope、owner、access level、credential 状态和项目引用数量，不显示完整密钥。
 
@@ -734,7 +736,9 @@ Electron 首版只有一种模式：本地设置页配置服务器后，BrowserW
 - job credential version 和源媒体 refcount/版本保留；
 - media_assets owner、MIME、对象 key、配额、Range 和 content API 隔离；
 - 同步 invocation 在响应丢失重试时复用结果，裸提示词不能从 request hash 反推；
+- 结果密钥轮换后按 `*_key_id` 成功重放 Chat/Test 幂等结果，未知 key ID fail closed；
 - Electron 远端页面不能读取旧 localhost localStorage，受信导出/迁移窗口和 renderer hardening。
+- Electron 迁移 envelope 的口令 KDF/一次性恢复密钥独立交付、AAD 校验、错误清除和跨版本导入。
 
 ## 15. 验收标准
 
