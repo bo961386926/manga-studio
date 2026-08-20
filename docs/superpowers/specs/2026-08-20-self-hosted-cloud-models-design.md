@@ -86,10 +86,7 @@ CREATE TABLE model_providers (
     auth_type IN ('none', 'bearer', 'api-key-header')
   ),
   auth_header_name VARCHAR(128),
-  credential_ciphertext BYTEA,
-  credential_iv BYTEA,
-  credential_tag BYTEA,
-  credential_key_id VARCHAR(64),
+  active_credential_version_id UUID,
   timeout_ms INTEGER,
   enabled BOOLEAN NOT NULL DEFAULT TRUE,
   deleted_at TIMESTAMPTZ,
@@ -123,10 +120,7 @@ CREATE TABLE models (
   base_url_override TEXT,
   auth_override_type VARCHAR(32),
   auth_override_header_name VARCHAR(128),
-  auth_override_ciphertext BYTEA,
-  auth_override_iv BYTEA,
-  auth_override_tag BYTEA,
-  auth_override_key_id VARCHAR(64),
+  auth_override_credential_version_id UUID,
   timeout_ms INTEGER,
   capabilities JSONB NOT NULL DEFAULT '{}',
   protocol_config JSONB NOT NULL DEFAULT '{}',
@@ -173,28 +167,31 @@ CREATE TABLE model_credential_versions (
   retired_at TIMESTAMPTZ,
   CHECK ((provider_id IS NOT NULL) <> (model_id IS NOT NULL))
 );
+
+ALTER TABLE model_providers
+  ADD CONSTRAINT model_providers_active_credential_fk
+  FOREIGN KEY (active_credential_version_id)
+  REFERENCES model_credential_versions(id);
+ALTER TABLE models
+  ADD CONSTRAINT models_override_credential_fk
+  FOREIGN KEY (auth_override_credential_version_id)
+  REFERENCES model_credential_versions(id);
 ```
 
 Provider/Model 当前配置只引用 active credential version；job snapshot 固定该 version UUID。版本只有在没有未终态 job 引用时才可物理清理。
 
+`auth_type='none'` 时 Provider 的 active version 必须为 NULL；Bearer/API-Key Header 必须引用所属 Provider 的 version。Model 的 override type 为 `none` 时 override version 必须为 NULL，其他 override type 必须引用同一 Model 的 version。job 的 nullable version 与 snapshot 中固定的 `authType/headerName` 一起决定调用，绝不回退到当前新凭证。
+
 ### 5.3 异步任务
 
 ```sql
--- Migration order: create model_invocations before model_jobs.
+-- Migration order: create media_assets and model_invocations before model_jobs.
 CREATE TABLE model_jobs (
   id UUID PRIMARY KEY,
-  invocation_id UUID NOT NULL UNIQUE REFERENCES model_invocations(id) ON DELETE RESTRICT,
+  invocation_id UUID NOT NULL UNIQUE,
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  model_id UUID REFERENCES models(id) ON DELETE SET NULL,
   model_snapshot JSONB NOT NULL,
-  credential_version_id UUID NOT NULL REFERENCES model_credential_versions(id),
-  operation VARCHAR(32) NOT NULL,
-  idempotency_key VARCHAR(128) NOT NULL,
-  request_hash CHAR(64) NOT NULL,
-  request_payload_ciphertext BYTEA NOT NULL,
-  request_payload_iv BYTEA NOT NULL,
-  request_payload_tag BYTEA NOT NULL,
-  request_payload_key_id VARCHAR(64) NOT NULL,
+  credential_version_id UUID REFERENCES model_credential_versions(id),
   upstream_task_id TEXT,
   upstream_resource_id TEXT,
   status VARCHAR(32) NOT NULL CHECK (status IN (
@@ -219,9 +216,16 @@ CREATE TABLE model_jobs (
   upstream_cancel_confirmed BOOLEAN,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  expires_at TIMESTAMPTZ NOT NULL,
-  UNIQUE(user_id, operation, idempotency_key)
+  expires_at TIMESTAMPTZ NOT NULL
 );
+
+ALTER TABLE model_invocations
+  ADD CONSTRAINT model_invocations_id_user_unique UNIQUE (id, user_id);
+ALTER TABLE model_jobs
+  ADD CONSTRAINT model_jobs_invocation_owner_fk
+  FOREIGN KEY (invocation_id, user_id)
+  REFERENCES model_invocations(id, user_id)
+  ON DELETE RESTRICT;
 ```
 
 只向前端暴露内部 job UUID。上游 task ID、resource ID 和结果 URL 不能成为客户端选择目标的依据。
@@ -230,9 +234,9 @@ CREATE TABLE model_jobs (
 
 Job 状态机与执行规则：
 
-1. 先以用户提供的 idempotency key、规范化请求哈希和 AEAD 加密请求 payload 创建 `created` job；AAD 绑定 job/user/model/operation。同 key 同 hash 返回原 job，不同 hash 返回冲突。
+1. 先以用户提供的 idempotency key、规范化请求哈希和 AEAD 加密请求 payload 创建 invocation，再以 invocation ID 创建 `created` job；AAD 绑定 invocation/job/user/model/operation。同 key 同 hash 返回原 invocation，不同 hash 返回冲突。
 2. worker 通过 `FOR UPDATE SKIP LOCKED` 获取带过期时间的 lease，再进入 `submitting`；多实例只能有一个有效 lease owner。
-3. 上游支持幂等 Header 时透传内部确定性 key；上游创建成功后必须在同一事务中持久化 task ID、credential version 和 `queued/polling` 状态。
+3. worker 从 invocation 解密请求 payload；上游支持幂等 Header 时透传 invocation 的内部确定性 key；上游创建成功后必须在同一事务中持久化 task ID、credential version 和 `queued/polling` 状态。
 4. 若连接在获得确定响应前断开且上游不支持幂等查询，进入 `submission_uncertain`，禁止自动重提以免重复收费；管理员可按审计 request ID 对账后绑定 task ID、标记失败或允许重试。
 5. 轮询失败按上限和指数退避更新 `attempt_count/next_poll_at`；进程重启由恢复扫描重新领取过期 lease。
 6. 成功媒体写入受限对象存储或受大小限制的流式响应，job 只保存 object key/元数据；不把大 Base64 放入数据库。
@@ -280,6 +284,10 @@ DELETE /api/media-assets/{id}       # 软删除，等待 ref_count 为 0 清理
 type MediaRef = { kind: 'media'; id: string; contentType: string; sizeBytes: number };
 ```
 
+`MediaRef` 是新网关和项目 JSON 的规范表示。为兼容现有 Stage，阶段 3 过渡 DTO 暂时使用 `string | MediaRef`：旧字符串只允许在 UI 展示和迁移边界出现；进入新网关前由 `ensureMediaRef()` 上传/解析为 MediaRef，网关响应的 `AssetResultV1` 映射回 MediaRef。需要 `<img>/<video>` 播放时由客户端通过已认证 content API 获取临时 object URL，不把公开远程 URL 写回项目。
+
+项目迁移顺序为：先创建/导入 media_assets，再替换项目 JSON 中的 Data URL/已知本地媒体引用为 MediaRef，最后启用只接受 MediaRef 的新网关。无法导入的旧远程 URL 只保留展示字符串并标记 `legacy_unimported`，重新生成前必须由用户重新上传。
+
 旧 URL/Data URL 只作为兼容输入；在进入新模型网关前必须由前端一次性上传成 MediaRef，服务端不抓取任意远程 URL。旧项目中的远程 URL 若无法由用户导入，则保留为展示引用但不能作为新模型参考图；迁移和首次使用导入均写入用户确认报告。
 
 ### 5.5 统一调用幂等记录
@@ -294,8 +302,24 @@ CREATE TABLE model_invocations (
   operation VARCHAR(32) NOT NULL,
   idempotency_key VARCHAR(128) NOT NULL,
   request_hash CHAR(64) NOT NULL,
-  status VARCHAR(24) NOT NULL,
+  request_payload_ciphertext BYTEA NOT NULL,
+  request_payload_iv BYTEA NOT NULL,
+  request_payload_tag BYTEA NOT NULL,
+  request_payload_key_id VARCHAR(64) NOT NULL,
+  status VARCHAR(24) NOT NULL CHECK (status IN (
+    'created', 'submitting', 'submission_uncertain', 'succeeded',
+    'failed', 'cancelled'
+  )),
+  lease_owner VARCHAR(128),
+  lease_expires_at TIMESTAMPTZ,
+  upstream_request_id VARCHAR(255),
   result_media_asset_id UUID REFERENCES media_assets(id),
+  result_text_ciphertext BYTEA,
+  result_text_iv BYTEA,
+  result_text_tag BYTEA,
+  result_json_ciphertext BYTEA,
+  result_json_iv BYTEA,
+  result_json_tag BYTEA,
   error_code VARCHAR(64),
   error_message VARCHAR(500),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -304,7 +328,7 @@ CREATE TABLE model_invocations (
 );
 ```
 
-`request_hash` 使用部署秘密 HMAC，而不是可字典枚举提示词的裸 SHA-256。同步调用在向上游发出前落库 invocation；上游成功后先持久化结果 MediaRef，再返回客户端。响应丢失后的相同 key 读取原结果，不重复收费。异步 `model_jobs` 一对一引用 invocation；test 调用也使用相同机制。
+`request_hash` 使用部署秘密 HMAC，而不是可字典枚举提示词的裸 SHA-256。所有收费调用（包括 chat 和 test）都必须要求 `Idempotency-Key`，并在向上游发出前落库 invocation；Chat/Test 的小结果使用 AEAD 加密字段保存，图片/视频保存 MediaRef。响应丢失后的相同 key 读取原结果，不重复收费。上游成功但进程在结果落库前崩溃时进入 `submission_uncertain`，无上游幂等查询不得自动重提。异步 `model_jobs` 一对一引用 invocation；test 调用也使用相同机制。
 
 ## 6. 凭证所有权与加密
 
@@ -543,7 +567,7 @@ type JobAcceptedV1 = {
 
 - Chat 成功返回 `200 ChatResultV1`；图片与同步视频成功返回 `200 AssetResultV1`；异步视频返回 `202 JobAcceptedV1`。
 - 图片/视频引用服务端 `assetId`，不允许任意远程 URL；服务端读取前验证资产 owner、MIME 和大小。单次图片最多 16 张参考图；视频最多 2 个帧引用，每个引用最大 50 MiB，prompt 最大 256 KiB。
-- 创建图片/视频和测试调用要求 `Idempotency-Key` Header；同用户/operation/key 同 hash 返回原结果，不同 hash 返回 `409 IDEMPOTENCY_CONFLICT`。
+- 所有可能收费的 chat/image/video/test 调用都要求 `Idempotency-Key` Header；同用户/operation/key 同 hash 返回原结果，不同 hash 返回 `409 IDEMPOTENCY_CONFLICT`。客户端必须在业务重试期间复用同一 key，服务端按 invocation 保留期处理过期 key。
 - job 查询、取消和内容必须使用 `WHERE id=$jobId AND user_id=req.auth.userId`；不存在和他人 job 统一返回 `404`，防止 IDOR。
 - `GET /jobs/{id}/content` 只对 succeeded job 返回受限流式媒体；不把大媒体放入 JSON Base64。
 - 错误统一为 `{schemaVersion:1,error:{code,message,requestId,retryable}}`，使用明确的 400/401/403/404/409/413/422/429/502/504；不返回上游原始正文或 stack。
@@ -626,7 +650,7 @@ GET/PATCH/DELETE /api/admin/shared-models/{modelId}
 
 服务器 migration 只能迁移已成功保存到数据库的数据。为处理后端写入曾失败、浏览器持有唯一副本的情况，bootstrap admin 首次登录提供一次性“旧模型配置导入”向导：
 
-- Web 端只能扫描当前远端 origin 的已知 key。Electron 旧 localhost origin 无法被远端页面跨 origin 读取，必须由旧版本导出加密 JSON 文件，或由受信本地迁移窗口读取后仅向管理员展示脱敏摘要；不能假设远端向导能读取旧 localStorage；
+- Web 端只能扫描当前远端 origin 的已知 key。Electron 旧 localhost origin 无法被远端页面跨 origin 读取，因此发布顺序固定为：先发布桥接版本增加“导出加密迁移包”功能；用户在旧 Electron 中导出后，再在新远端 Web 应用中导入。新版本不实现本地迁移窗口，也不能假设远端向导能读取旧 localStorage；
 - 只扫描 `manga_studio_model_registry`、`antsk_api_key`、`manga_studio_model_config` 三个已知 key；
 - 同时解析字符串 JSON 和对象 JSON，先在本地展示脱敏摘要；
 - 只有管理员明确确认后，才通过专用一次性导入 API 上传；
@@ -634,6 +658,8 @@ GET/PATCH/DELETE /api/admin/shared-models/{modelId}
 - 导入成功且管理员再次确认后才删除本地副本；失败保持原数据并可重试；
 - API 在该部署完成一次导入或管理员明确跳过后永久关闭；
 - 普通用户不能使用该迁移入口。
+
+迁移包使用独立 AEAD 密钥和版本化格式，仅允许这三个已知配置 key、项目内媒体/模型引用摘要和必要凭证；导出文件由用户自行保管，导入成功后服务端和客户端都擦除临时副本。桥接版本的导出、远端版本的导入和失败恢复分别有端到端测试。
 
 迁移报告逐项列出旧 ID、新 UUID、scope、owner、access level、credential 状态和项目引用数量，不显示完整密钥。
 

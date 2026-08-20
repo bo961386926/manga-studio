@@ -168,7 +168,7 @@ CREATE TABLE user_action_tokens (
   id UUID PRIMARY KEY,
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   purpose VARCHAR(32) NOT NULL CHECK (
-    purpose IN ('verify_email', 'reset_password')
+    purpose IN ('verify_email', 'reset_password', 'bootstrap_admin')
   ),
   token_hash CHAR(64) NOT NULL UNIQUE,
   expires_at TIMESTAMPTZ NOT NULL,
@@ -225,6 +225,8 @@ CREATE TABLE email_outbox (
 注册、验证重发和找回密码只在事务中写入 outbox 并快速返回；独立 worker 负责 SMTP、指数退避、最大重试和死信状态，避免 SMTP 时延泄露账号存在性或阻塞请求。
 
 `template_data` 不包含原始令牌。需要投递的原始一次性令牌使用独立邮件投递密钥执行 AEAD 加密并绑定 outbox ID、user ID、purpose 和 action_token_id；数据库只保存加密值。worker 通过 `FOR UPDATE SKIP LOCKED` 或原子 lease 抢占 pending 记录，多实例不会重复发送同一条；发送成功或进入死信后按策略擦除密文，验证时仍只比较 `user_action_tokens.token_hash`。创建新令牌时同一事务取消旧未发送 outbox。
+
+数据库约束触发器校验 `email_outbox.user_id/purpose/action_token_id` 与 `user_action_tokens.user_id/purpose` 一致；bootstrap 邮件也走同一条件消费和审计流程。
 
 ### 5.5 VIP entitlements
 
@@ -564,6 +566,7 @@ Android 不在本轮实现和验收范围。API 不依赖 Electron 专有认证�
 - 两用户越权测试和历史数据恢复演练通过；
 - 旧 `/api/config/:key` 删除；
 - AI 入口保持关闭，旧 `/api/ai-forward` 不对普通用户或公网开放；
+- 若支持 Electron 升级，桥接版本已先发布并能导出加密迁移包；
 - 仍不作为完整公网 AI 产品发布。
 
 ### 阶段 3：权益与安全模型平台
