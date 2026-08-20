@@ -140,6 +140,10 @@ CREATE TABLE sessions (
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   token_hash CHAR(64) NOT NULL UNIQUE,
   session_version INTEGER NOT NULL,
+  csrf_token_hash CHAR(64),
+  csrf_expires_at TIMESTAMPTZ,
+  csrf_version INTEGER NOT NULL DEFAULT 1,
+  reauthenticated_at TIMESTAMPTZ,
   expires_at TIMESTAMPTZ NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -194,6 +198,11 @@ RETURNING user_id;
 ```sql
 CREATE TABLE email_outbox (
   id UUID PRIMARY KEY,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  purpose VARCHAR(32) NOT NULL CHECK (
+    purpose IN ('verify_email', 'reset_password', 'bootstrap_admin')
+  ),
+  action_token_id UUID REFERENCES user_action_tokens(id) ON DELETE SET NULL,
   kind VARCHAR(32) NOT NULL,
   recipient_email VARCHAR(320) NOT NULL,
   template_data JSONB NOT NULL,
@@ -205,14 +214,17 @@ CREATE TABLE email_outbox (
   attempt_count INTEGER NOT NULL DEFAULT 0,
   next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   last_error_code VARCHAR(64),
+  lease_owner VARCHAR(128),
+  lease_expires_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  sent_at TIMESTAMPTZ
+  sent_at TIMESTAMPTZ,
+  CHECK (status IN ('pending', 'sending', 'sent', 'dead'))
 );
 ```
 
 注册、验证重发和找回密码只在事务中写入 outbox 并快速返回；独立 worker 负责 SMTP、指数退避、最大重试和死信状态，避免 SMTP 时延泄露账号存在性或阻塞请求。
 
-`template_data` 不包含原始令牌。需要投递的原始一次性令牌使用独立邮件投递密钥执行 AEAD 加密并绑定 outbox ID、user ID 和 purpose；数据库只保存加密值。发送成功或进入死信后按策略擦除密文，验证时仍只比较 `user_action_tokens.token_hash`。
+`template_data` 不包含原始令牌。需要投递的原始一次性令牌使用独立邮件投递密钥执行 AEAD 加密并绑定 outbox ID、user ID、purpose 和 action_token_id；数据库只保存加密值。worker 通过 `FOR UPDATE SKIP LOCKED` 或原子 lease 抢占 pending 记录，多实例不会重复发送同一条；发送成功或进入死信后按策略擦除密文，验证时仍只比较 `user_action_tokens.token_hash`。创建新令牌时同一事务取消旧未发送 outbox。
 
 ### 5.5 VIP entitlements
 
@@ -470,9 +482,9 @@ getAllProjects(userId)
 Bootstrap 规则：
 
 - 只能在维护模式下运行离线命令，例如 `npm run admin:bootstrap -- --email <email>`；
-- 数据库已存在任意 active admin 时永久拒绝 bootstrap；
+- 数据库已存在任意 active admin 时永久拒绝 bootstrap；CLI 先取得数据库 advisory lock，防止并发 bootstrap 绕过检查；
 - 不允许仅凭 `BOOTSTRAP_ADMIN_EMAIL` 自动提升已有账号；
-- 全新用户表时，CLI 创建 pending 管理员和一次性设置密码/验证 token，token 只在受保护终端显示一次；
+- 全新用户表时，CLI 创建 pending 管理员和 `bootstrap_admin` 一次性设置密码/验证 token，token 只在受保护终端显示一次；
 - 若邮箱已存在，CLI 生成需要邮箱所有权验证和一次性 bootstrap secret 的确认流程，不直接提升；
 - 管理员完成密码设置和邮箱验证后才激活并执行历史数据回填；
 - 明文初始密码不得写入环境变量、数据库或日志；
@@ -557,6 +569,8 @@ Android 不在本轮实现和验收范围。API 不依赖 Electron 专有认证�
 ### 阶段 3：权益与安全模型平台
 
 - VIP、共享/私有模型、服务端密钥、安全网关、job、usage 和审计完成；
+- `media_assets`、对象存储、上传/读取/删除、配额和旧 URL/Data URL 导入完成；
+- 同步和异步调用均有统一 invocation 幂等记录；
 - 浏览器旧配置完成用户确认导入或明确放弃；
 - 旧模型引用迁移完成；
 - 生产环境删除 `/api/ai-forward`；
@@ -606,6 +620,8 @@ Android 不在本轮实现和验收范围。API 不依赖 Electron 专有认证�
 - 管理聚合接口不返回用户正文或密钥；
 - 账号切换不复用前一用户缓存；
 - 并发创建相同业务 ID 不跨用户冲突。
+- CSRF token 原子轮换、过期和 session 绑定；
+- 最近再认证时间持久化、权限变更后清除和多实例读取。
 
 ### 15.4 VIP 与管理测试
 

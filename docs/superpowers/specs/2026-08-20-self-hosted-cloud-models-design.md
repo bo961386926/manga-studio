@@ -147,23 +147,47 @@ CREATE TABLE models (
 - `adapter_kind` 标识现有专用 Adapter 或自建协议 Adapter。
 - `protocol_preset` 只用于自建协议。
 - Provider 为 `private` 时，其模型天然归属于同一 `owner_user_id`；Provider 为 `shared` 时，其模型天然为共享模型。
-- VIP 用户只能在 `SELECT ... FOR UPDATE WHERE provider.id=$1 AND provider.owner_user_id=req.auth.userId AND scope='private'` 成功的同一事务中创建模型。
+- VIP 用户只能在 `SELECT ... FOR UPDATE WHERE provider.id=$1 AND provider.owner_user_id=req.auth.userId AND scope='private' AND enabled=TRUE AND deleted_at IS NULL` 成功的同一事务中创建模型。
 - 共享 Provider 下的模型只能由管理员创建；普通用户不能从共享 Provider 派生模型。
 - `access_level` 只控制共享模型；私有模型只允许 Provider owner 调用，创建和调用均要求有效 VIP。
 - Provider/Model 默认软删除。存在 job/usage 的资源不得物理级联删除；后台清理按保留策略执行。
 
-数据库启用并强制 RLS，应用运行账号不是表 owner。每个事务用 `SET LOCAL app.user_id/app.is_admin` 绑定认证上下文；写入模型的约束触发器锁定 Provider 并验证上述 owner/scope 规则。创建、更新、猜测其他 Provider UUID、普通用户写共享 Provider 均有负向测试。
+数据库启用并强制 RLS，应用运行账号不是表 owner。每个事务用 `SET LOCAL app.user_id/app.is_admin` 绑定认证上下文；GUC 缺失、格式非法或事务回滚时 policy fail closed。写入模型的约束触发器锁定 Provider 并验证上述 owner/scope/enabled/deleted_at 规则。创建、更新、猜测其他 Provider UUID、普通用户写共享 Provider 均有负向测试。
 
 当 `base_url_override` 的规范化 origin 与 Provider origin 不同，模型必须配置完整独立鉴权覆盖（包括显式 `none`）；禁止继承 Provider 凭证。相同 origin 才可继承 Provider 鉴权。该规则在保存事务和调用时双重校验。
+
+### 5.2.1 Credential versions
+
+Provider 或 Model 的凭证替换不覆盖仍被排队 job 使用的版本。正规化凭证版本表保存加密值：
+
+```sql
+CREATE TABLE model_credential_versions (
+  id UUID PRIMARY KEY,
+  provider_id UUID REFERENCES model_providers(id) ON DELETE CASCADE,
+  model_id UUID REFERENCES models(id) ON DELETE CASCADE,
+  ciphertext BYTEA NOT NULL,
+  iv BYTEA NOT NULL,
+  tag BYTEA NOT NULL,
+  encryption_key_id VARCHAR(64) NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  retired_at TIMESTAMPTZ,
+  CHECK ((provider_id IS NOT NULL) <> (model_id IS NOT NULL))
+);
+```
+
+Provider/Model 当前配置只引用 active credential version；job snapshot 固定该 version UUID。版本只有在没有未终态 job 引用时才可物理清理。
 
 ### 5.3 异步任务
 
 ```sql
+-- Migration order: create model_invocations before model_jobs.
 CREATE TABLE model_jobs (
   id UUID PRIMARY KEY,
+  invocation_id UUID NOT NULL UNIQUE REFERENCES model_invocations(id) ON DELETE RESTRICT,
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   model_id UUID REFERENCES models(id) ON DELETE SET NULL,
   model_snapshot JSONB NOT NULL,
+  credential_version_id UUID NOT NULL REFERENCES model_credential_versions(id),
   operation VARCHAR(32) NOT NULL,
   idempotency_key VARCHAR(128) NOT NULL,
   request_hash CHAR(64) NOT NULL,
@@ -208,12 +232,79 @@ Job 状态机与执行规则：
 
 1. 先以用户提供的 idempotency key、规范化请求哈希和 AEAD 加密请求 payload 创建 `created` job；AAD 绑定 job/user/model/operation。同 key 同 hash 返回原 job，不同 hash 返回冲突。
 2. worker 通过 `FOR UPDATE SKIP LOCKED` 获取带过期时间的 lease，再进入 `submitting`；多实例只能有一个有效 lease owner。
-3. 上游支持幂等 Header 时透传内部确定性 key；上游创建成功后持久化 task ID，再进入 `queued/polling`。
+3. 上游支持幂等 Header 时透传内部确定性 key；上游创建成功后必须在同一事务中持久化 task ID、credential version 和 `queued/polling` 状态。
 4. 若连接在获得确定响应前断开且上游不支持幂等查询，进入 `submission_uncertain`，禁止自动重提以免重复收费；管理员可按审计 request ID 对账后绑定 task ID、标记失败或允许重试。
 5. 轮询失败按上限和指数退避更新 `attempt_count/next_poll_at`；进程重启由恢复扫描重新领取过期 lease。
 6. 成功媒体写入受限对象存储或受大小限制的流式响应，job 只保存 object key/元数据；不把大 Base64 放入数据库。
 7. `cancel_requested` 表示用户希望停止。如果协议配置了受支持的上游 cancel endpoint，则尝试取消并记录是否确认；否则只停止本地后续轮询，并明确提示“上游任务可能继续运行和计费”。
 8. 终态 job 保留模型不可变快照和脱敏错误；按保留策略清理对象、签名 URL 和过期 job。
+
+任何 lease 过期的 `submitting` job 默认转为 `submission_uncertain`，不得直接重新提交；只有上游提供相同幂等 key 查询或已证明安全重放时才可恢复。必须注入测试“上游成功后、数据库提交 task ID 前进程崩溃”，验证不会重复创建收费任务。
+
+`model_snapshot` 只包含协议版本、Provider/Model UUID、规范化 origin、endpoint、api_model、能力配置和 credential version ID，绝不复制凭证明文或凭证密文。排队任务固定创建时的 credential version；Provider 凭证替换不影响已提交任务。
+
+源参考媒体在 job 终态前通过对象版本或 job 专用引用保留；用户删除原媒体只减少普通引用，不删除 job 仍需要的对象。终态后按媒体保留策略释放引用。
+
+### 5.4 媒体资产
+
+现有 `assets` 表继续表示角色/场景 JSON 资产库，不把它当作二进制媒体表。新增专用媒体表：
+
+```sql
+CREATE TABLE media_assets (
+  id UUID PRIMARY KEY,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  object_key TEXT NOT NULL UNIQUE,
+  content_type VARCHAR(128) NOT NULL,
+  size_bytes BIGINT NOT NULL,
+  checksum_sha256 CHAR(64) NOT NULL,
+  status VARCHAR(16) NOT NULL CHECK (status IN ('uploading', 'ready', 'failed', 'deleted')),
+  ref_count INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  deleted_at TIMESTAMPTZ
+);
+```
+
+对象 key 由服务端生成并带 user/job namespace；bucket 默认私有。接口为：
+
+```text
+POST /api/media-assets              # multipart 上传，返回 MediaRef
+GET  /api/media-assets/{id}/content # owner 校验后流式读取
+DELETE /api/media-assets/{id}       # 软删除，等待 ref_count 为 0 清理
+```
+
+上传限制：单文件最大 50 MiB、图片/视频 MIME 白名单、每请求最多 16 个文件、每日每用户默认 2 GiB。`GET` 只允许已认证 owner 或其 job owner，设置 `Content-Disposition: attachment`、`X-Content-Type-Options: nosniff`，不支持未授权 Range 穿透。
+
+新业务使用：
+
+```ts
+type MediaRef = { kind: 'media'; id: string; contentType: string; sizeBytes: number };
+```
+
+旧 URL/Data URL 只作为兼容输入；在进入新模型网关前必须由前端一次性上传成 MediaRef，服务端不抓取任意远程 URL。旧项目中的远程 URL 若无法由用户导入，则保留为展示引用但不能作为新模型参考图；迁移和首次使用导入均写入用户确认报告。
+
+### 5.5 统一调用幂等记录
+
+所有可能收费的 chat/image/video/test 调用先创建统一 invocation：
+
+```sql
+CREATE TABLE model_invocations (
+  id UUID PRIMARY KEY,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  model_id UUID REFERENCES models(id) ON DELETE SET NULL,
+  operation VARCHAR(32) NOT NULL,
+  idempotency_key VARCHAR(128) NOT NULL,
+  request_hash CHAR(64) NOT NULL,
+  status VARCHAR(24) NOT NULL,
+  result_media_asset_id UUID REFERENCES media_assets(id),
+  error_code VARCHAR(64),
+  error_message VARCHAR(500),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(user_id, operation, idempotency_key)
+);
+```
+
+`request_hash` 使用部署秘密 HMAC，而不是可字典枚举提示词的裸 SHA-256。同步调用在向上游发出前落库 invocation；上游成功后先持久化结果 MediaRef，再返回客户端。响应丢失后的相同 key 读取原结果，不重复收费。异步 `model_jobs` 一对一引用 invocation；test 调用也使用相同机制。
 
 ## 6. 凭证所有权与加密
 
@@ -280,6 +371,19 @@ interface VideoCapabilitiesV1 {
   allowedDurations: number[];
   maxFrameBytes: number;
 }
+
+interface ChatCapabilitiesV1 {
+  schemaVersion: 1;
+  supportsJsonResponseFormat: boolean;
+  maxPromptBytes: number;
+}
+
+interface ImageCapabilitiesV1 {
+  schemaVersion: 1;
+  maxReferenceImages: number;
+  allowedSizes: string[];
+  maxImageBytes: number;
+}
 ```
 
 未知版本、未知必填字段或超出服务端安全上限时拒绝保存，不把任意 JSONB 直接传给 Adapter。
@@ -309,6 +413,7 @@ interface VideoCapabilitiesV1 {
 
 ```ts
 interface OpenAiImageProtocolConfig {
+  schemaVersion: 1;
   generationEndpoint: string; // /v1/images/generations
   editEndpoint: string;       // /v1/images/edits
   maxReferenceImages: number; // 0..16
@@ -353,6 +458,7 @@ interface OpenAiImageProtocolConfig {
 
 ```ts
 interface OpenAiVideoAsyncProtocolConfig {
+  schemaVersion: 1;
   createEndpoint: string;   // /v1/videos
   statusEndpoint: string;   // /v1/videos/{taskId}
   contentEndpoint: string;  // /v1/videos/{resourceId}/content
@@ -405,16 +511,16 @@ interface ChatResultV1 {
 
 interface ImageInvokeV1 {
   schemaVersion: 1;
-  prompt: string;
+  prompt: string;          // UTF-8 <= 256 KiB
   aspectRatio: '16:9' | '9:16' | '1:1';
-  referenceAssetIds?: string[];
+  referenceAssetIds?: string[]; // <= 16 UUIDs
 }
 
 interface VideoInvokeV1 {
   schemaVersion: 1;
-  prompt: string;
+  prompt: string;          // UTF-8 <= 256 KiB
   aspectRatio: '16:9' | '9:16' | '1:1';
-  duration: number;
+  duration: number;        // only configured allowed durations
   startAssetId?: string;
   endAssetId?: string;
 }
@@ -436,7 +542,7 @@ type JobAcceptedV1 = {
 ```
 
 - Chat 成功返回 `200 ChatResultV1`；图片与同步视频成功返回 `200 AssetResultV1`；异步视频返回 `202 JobAcceptedV1`。
-- 图片/视频引用服务端 `assetId`，不允许任意远程 URL；服务端读取前验证资产 owner、MIME 和大小。
+- 图片/视频引用服务端 `assetId`，不允许任意远程 URL；服务端读取前验证资产 owner、MIME 和大小。单次图片最多 16 张参考图；视频最多 2 个帧引用，每个引用最大 50 MiB，prompt 最大 256 KiB。
 - 创建图片/视频和测试调用要求 `Idempotency-Key` Header；同用户/operation/key 同 hash 返回原结果，不同 hash 返回 `409 IDEMPOTENCY_CONFLICT`。
 - job 查询、取消和内容必须使用 `WHERE id=$jobId AND user_id=req.auth.userId`；不存在和他人 job 统一返回 `404`，防止 IDOR。
 - `GET /jobs/{id}/content` 只对 succeeded job 返回受限流式媒体；不把大媒体放入 JSON Base64。
@@ -469,6 +575,8 @@ type JobAcceptedV1 = {
 ### 10.3 Header、超时和大小
 
 上游 Header 由服务器 Adapter 生成。禁止客户端传 Authorization、Cookie、Host、逐跳 Header、Forwarded 系列和预设外 Header。
+
+自定义 API Key Header 名即使来自服务端配置也必须通过 RFC token 校验，并大小写不敏感地拒绝：`Host`、`Cookie`、`Authorization`、`Proxy-Authorization`、`Connection`、`Keep-Alive`、`TE`、`Trailer`、`Transfer-Encoding`、`Upgrade`、`Content-Length`、`Forwarded`、`Via`、所有 `X-Forwarded-*` 以及 Adapter 保留字段。保存和调用时双重校验，非法配置 fail closed。
 
 每个请求定义连接、Headers、Body idle 和总超时；浏览器 AbortSignal 贯通同步调用。异步任务不因页面断开自动取消，只响应显式 cancel。Nginx 与应用超时必须形成一致预算。请求体、单文件、文件数、Base64 解码后数据、错误体和最终媒体均有限制；二进制使用流式转发或受限对象存储，不使用无上限 `arrayBuffer()`。
 
@@ -518,6 +626,7 @@ GET/PATCH/DELETE /api/admin/shared-models/{modelId}
 
 服务器 migration 只能迁移已成功保存到数据库的数据。为处理后端写入曾失败、浏览器持有唯一副本的情况，bootstrap admin 首次登录提供一次性“旧模型配置导入”向导：
 
+- Web 端只能扫描当前远端 origin 的已知 key。Electron 旧 localhost origin 无法被远端页面跨 origin 读取，必须由旧版本导出加密 JSON 文件，或由受信本地迁移窗口读取后仅向管理员展示脱敏摘要；不能假设远端向导能读取旧 localStorage；
 - 只扫描 `manga_studio_model_registry`、`antsk_api_key`、`manga_studio_model_config` 三个已知 key；
 - 同时解析字符串 JSON 和对象 JSON，先在本地展示脱敏摘要；
 - 只有管理员明确确认后，才通过专用一次性导入 API 上传；
@@ -542,7 +651,7 @@ Provider/模型 API 默认执行软删除并立即禁止新调用。Job 和 usag
 
 ## 13. Electron
 
-Electron 首版只有一种模式：本地设置页配置服务器后，BrowserWindow 直接加载该 HTTPS origin 的远端 Web 应用；登录、Cookie、CSRF、VIP、Provider、模型和任务 API 全部同源。不打包 Express 网关、PostgreSQL 或模型密钥，不提供本地任意代理。服务器切换清理旧会话，证书错误不自动忽略，导航限制到配置服务器和必要外链。Android 不在本轮范围。
+Electron 首版只有一种模式：本地设置页配置服务器后，BrowserWindow 直接加载该 HTTPS origin 的远端 Web 应用；登录、Cookie、CSRF、VIP、Provider、模型和任务 API 全部同源。不打包 Express 网关、PostgreSQL 或模型密钥，不提供本地任意代理。BrowserWindow 强制 `sandbox: true`、`nodeIntegration: false`、`contextIsolation: true`、`webSecurity: true`，不注入远端 preload；权限请求默认拒绝，外链交给系统浏览器。服务器切换清理旧会话，证书错误不自动忽略，导航限制到配置服务器。Android 不在本轮范围。
 
 ## 14. 测试策略
 
@@ -559,6 +668,7 @@ Electron 首版只有一种模式：本地设置页配置服务器后，BrowserW
 - 私有资源 owner 隔离；共享资源管理员管理；
 - RLS/约束触发器拒绝猜测他人 Provider UUID、普通用户写共享 Provider、私有模型引用共享 Provider；
 - 跨 origin Base URL override 在继承 Provider 凭证时拒绝，独立 `none`/独立凭证时按策略验证；
+- 自定义鉴权 Header 名 RFC token、保留 Header 拒绝及保存/调用双重校验；
 - verified/VIP/admin access level；
 - VIP 到期阻止新调用但保留配置；
 - 凭证 keep/replace/remove 和掩码响应；
@@ -594,6 +704,11 @@ Electron 首版只有一种模式：本地设置页配置服务器后，BrowserW
 - 自建协议使用本地受控 mock upstream 验证。
 - 一次性浏览器旧配置导入、明确跳过、失败保留和成功清除；
 - 项目内旧模型引用迁移后可重新生成分镜。
+- `submitting` lease 过期转 uncertain、上游成功后 DB 提交前崩溃注入；
+- job credential version 和源媒体 refcount/版本保留；
+- media_assets owner、MIME、对象 key、配额、Range 和 content API 隔离；
+- 同步 invocation 在响应丢失重试时复用结果，裸提示词不能从 request hash 反推；
+- Electron 远端页面不能读取旧 localhost localStorage，受信导出/迁移窗口和 renderer hardening。
 
 ## 15. 验收标准
 
