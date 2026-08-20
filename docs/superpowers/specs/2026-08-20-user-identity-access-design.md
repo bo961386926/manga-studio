@@ -33,17 +33,22 @@
 
 ## 3. 范围拆分与实施依赖
 
-身份与访问基础必须先于自建云端模型落地，顺序为：
+完整交付拆为三个有明确退出条件的阶段：
 
 ```text
-认证与会话
-  -> 用户数据归属与隔离
-  -> 管理员与 VIP 权益
-  -> 服务端模型配置和密钥所有权
-  -> 受控自建模型调用
+阶段 1：认证基础
+  -> 用户、邮箱验证、密码、会话、CSRF、CORS、bootstrap admin
+阶段 2：用户数据隔离
+  -> projects/assets/user_settings 归属迁移与 API 隔离
+阶段 3：权益与安全模型平台
+  -> VIP、共享/私有模型、密钥迁移、安全模型网关、用量记录
 ```
 
-自建模型设计依赖本规格提供的 `req.auth.userId`、角色判断、VIP 权益判断、审计日志和用户级数据访问接口。
+- 阶段 1 只允许内部验收；由于业务数据仍全局共享，不得公开上线。
+- 阶段 2 完成后项目、资产和设置已隔离，但 AI 功能保持关闭；不得保留旧任意代理供普通用户使用。
+- 阶段 3 完成并删除旧任意代理后，系统才达到公网发布条件。
+
+自建模型设计只依赖阶段 1、2 的身份和隔离基础；VIP、共享模型、服务端密钥和安全网关属于阶段 3，与自建模型规格共同验收。这样身份规格不要求模型阶段预先完成，避免循环依赖。
 
 ## 4. 角色、状态与权限
 
@@ -125,6 +130,8 @@ CREATE TABLE users (
 
 `email_normalized` 使用去除首尾空白后的 Unicode 规范化和小写结果。原始 `email` 用于展示和发信。
 
+密码按 UTF-8 字节数限制为 10–128 字节，不对密码做 Unicode 归一化。Argon2id 参数在部署硬件上校准，生产最低基线为 64 MiB memory、3 iterations、parallelism 1；登录成功时执行 `needsRehash` 并渐进升级旧哈希。
+
 ### 5.2 sessions
 
 ```sql
@@ -168,7 +175,46 @@ CREATE TABLE user_action_tokens (
 
 验证邮件 24 小时失效，密码重置 30 分钟失效；令牌只能使用一次。创建新令牌时使同用途未使用旧令牌失效。
 
-### 5.4 VIP entitlements
+消费令牌必须使用条件更新：
+
+```sql
+UPDATE user_action_tokens
+SET consumed_at = NOW()
+WHERE token_hash = $1
+  AND purpose = $2
+  AND consumed_at IS NULL
+  AND expires_at > NOW()
+RETURNING user_id;
+```
+
+令牌消费、用户状态/密码更新、`session_version` 递增和会话撤销位于同一数据库事务中；未返回记录即统一判定为无效或已使用。
+
+### 5.4 邮件 outbox
+
+```sql
+CREATE TABLE email_outbox (
+  id UUID PRIMARY KEY,
+  kind VARCHAR(32) NOT NULL,
+  recipient_email VARCHAR(320) NOT NULL,
+  template_data JSONB NOT NULL,
+  action_token_ciphertext BYTEA,
+  action_token_iv BYTEA,
+  action_token_tag BYTEA,
+  action_token_key_id VARCHAR(64),
+  status VARCHAR(16) NOT NULL,
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_error_code VARCHAR(64),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  sent_at TIMESTAMPTZ
+);
+```
+
+注册、验证重发和找回密码只在事务中写入 outbox 并快速返回；独立 worker 负责 SMTP、指数退避、最大重试和死信状态，避免 SMTP 时延泄露账号存在性或阻塞请求。
+
+`template_data` 不包含原始令牌。需要投递的原始一次性令牌使用独立邮件投递密钥执行 AEAD 加密并绑定 outbox ID、user ID 和 purpose；数据库只保存加密值。发送成功或进入死信后按策略擦除密文，验证时仍只比较 `user_action_tokens.token_hash`。
+
+### 5.5 VIP entitlements
 
 ```sql
 CREATE TABLE user_entitlements (
@@ -185,7 +231,7 @@ CREATE TABLE user_entitlements (
 );
 ```
 
-### 5.5 用户数据归属
+### 5.6 用户数据归属
 
 为现有表增加 `user_id`：
 
@@ -196,8 +242,9 @@ ALTER TABLE assets ADD COLUMN user_id UUID REFERENCES users(id);
 
 迁移完成后：
 
-- `projects` 主键由全局 `id` 约束调整为 `(user_id, id)` 唯一；
-- `assets` 主键由全局 `id` 约束调整为 `(user_id, id)` 唯一；
+- 显式删除 `projects.id` 和 `assets.id` 的旧单列主键；
+- 建立 `(user_id, id)` 复合主键；
+- 所有 upsert 改用 `ON CONFLICT (user_id, id)`；
 - 所有 SELECT/UPDATE/DELETE 必须同时包含 `user_id`；
 - ID 冲突不能导致跨用户覆盖。
 
@@ -221,7 +268,9 @@ CREATE TABLE user_settings (
 
 模型 Provider、模型和密钥使用自建模型设计定义的正规化表，不继续放在普通 JSON 配置中。
 
-### 5.6 审计日志
+设置 API 分离为允许键清单控制的 `/api/user/settings/:key` 和管理员 `/api/admin/system-settings/:key`。旧 `/api/config/:key` 只允许 migration 使用，并在阶段 2 结束前删除，普通用户不能通过任意 key 修改系统设置。
+
+### 5.7 审计日志
 
 ```sql
 CREATE TABLE audit_events (
@@ -252,14 +301,14 @@ CREATE INDEX audit_events_created_idx ON audit_events(created_at DESC);
 4. 以 Argon2id 生成密码哈希；
 5. 创建 `pending_verification` 用户；
 6. 创建一次性验证令牌；
-7. 发送验证邮件；
+7. 在同一事务写入验证邮件 outbox；
 8. 返回不泄漏账号细节的统一结果。
 
 管理员可在系统设置中暂停注册。暂停后注册接口返回服务不可注册状态，登录和已有用户不受影响。
 
 ### 6.2 邮箱验证
 
-验证链接包含一次性随机令牌，前端提交到 `POST /api/auth/verify-email`。验证成功后：
+验证链接把一次性随机令牌放在 URL fragment 中，fragment 不发送给 Web 服务器；前端读取后通过 `POST /api/auth/verify-email` 提交。验证成功后：
 
 - 标记令牌已使用；
 - 设置 `email_verified_at`；
@@ -270,7 +319,7 @@ CREATE INDEX audit_events_created_idx ON audit_events(created_at DESC);
 
 ### 6.3 登录
 
-`POST /api/auth/login` 使用规范化邮箱查找账号并验证 Argon2id 哈希。只有 `active` 用户可建立业务会话。
+`POST /api/auth/login` 使用规范化邮箱查找账号并验证 Argon2id 哈希。邮箱不存在、未验证或禁用时仍执行预先生成的 dummy Argon2id hash，降低响应时序枚举。只有 `active` 用户可建立业务会话。
 
 成功后生成至少 256 bit 随机会话令牌，数据库保存哈希，浏览器获得 HttpOnly Cookie。失败响应不区分邮箱不存在、密码错误或账号被禁用。
 
@@ -285,7 +334,7 @@ CREATE INDEX audit_events_created_idx ON audit_events(created_at DESC);
 
 ### 6.5 密码重置
 
-找回密码接口始终返回统一成功提示。有效账号收到 30 分钟一次性链接。重置成功后更新 Argon2id 哈希、消费令牌、递增 `session_version` 并撤销全部会话。
+找回密码接口始终返回统一成功提示并快速返回；有效账号的 30 分钟一次性链接由 outbox 异步投递。重置成功后在单事务内更新 Argon2id 哈希、消费令牌、递增 `session_version` 并撤销全部会话。重置链接也使用 URL fragment，认证落地页禁止被代理记录查询串并设置严格 `Referrer-Policy: no-referrer`。
 
 ## 7. API 认证与授权
 
@@ -317,6 +366,8 @@ requestId
 
 Electron 使用同一认证和 CSRF 流程，其配置的服务器 origin 必须精确匹配。
 
+`GET /api/auth/csrf` 为有效 session 返回至少 256 bit、与 session ID 绑定并服务端保存哈希的短期 CSRF token。登录成功、权限提升和 session 轮换后立即轮换 CSRF token；所有 session-authenticated mutation 强制校验。注册、登录、验证和重置等匿名 mutation 没有 session token，必须校验精确 Origin、`Sec-Fetch-Site`/Fetch Metadata、Content-Type 和端点限流。
+
 ### 7.3 CORS
 
 - 禁止 `Access-Control-Allow-Origin: *` 与凭证请求组合；
@@ -340,6 +391,19 @@ Electron 使用同一认证和 CSRF 流程，其配置的服务器 origin 必须
 
 认证前使用 IP/网段键，认证后同时使用 user ID。多实例部署时限制状态必须使用共享存储，不能只保存在单进程内存中。
 
+安全默认值如下，可由管理员向更严格方向调整：
+
+| 端点 | 默认限制 |
+|---|---|
+| 登录 | 每 IP 10 次/10 分钟；每账号 5 次/10 分钟 |
+| 注册 | 每 IP 5 次/小时 |
+| 验证邮件重发 | 每 IP 5 次/小时；每邮箱 3 次/小时 |
+| 找回密码 | 每 IP 5 次/小时；每邮箱 3 次/小时 |
+| 管理员敏感操作 | 每用户 20 次/分钟并要求近期再认证 |
+| 模型调用 | 每用户并发 2、每分钟 20，另受管理员配置限制 |
+
+模型并发槽必须用共享存储原子获取，带租约和崩溃过期回收。只有来自配置的受信代理 CIDR 和固定跳数才解析 `X-Forwarded-For`，其他请求使用 socket peer 地址。
+
 ## 8. 邮件系统
 
 首版使用标准 SMTP，通过环境变量配置：
@@ -348,6 +412,7 @@ Electron 使用同一认证和 CSRF 流程，其配置的服务器 origin 必须
 SMTP_HOST=
 SMTP_PORT=
 SMTP_SECURE=true
+SMTP_REQUIRE_TLS=true
 SMTP_USER=
 SMTP_PASSWORD=
 SMTP_FROM=
@@ -358,8 +423,10 @@ PUBLIC_APP_URL=
 
 - 邮件链接只能使用配置的 `PUBLIC_APP_URL`，不能信任请求 Host；
 - SMTP 凭证不得通过管理 API 返回；
+- `SMTP_SECURE=true` 表示隐式 TLS；否则生产环境必须以 STARTTLS 升级并由 `SMTP_REQUIRE_TLS=true` 强制执行；
+- 生产环境强制证书校验、连接/命令超时，并校验发件地址及邮件 Header，拒绝 CR/LF 注入；
 - 开发环境支持控制台输出或本地邮件捕获服务；
-- 发信失败不回滚已创建用户，但记录可重试状态并允许受限重发；
+- 发信失败由 outbox worker 重试，不回滚已创建用户；达到上限进入死信并产生管理员告警；
 - 邮件内容不得包含密码或模型凭证。
 
 ## 9. 数据访问与隔离
@@ -392,13 +459,24 @@ getAllProjects(userId)
 1. 进入维护模式，阻止写入；
 2. 完整备份 PostgreSQL；
 3. 执行新表和 nullable `user_id` migration；
-4. 通过 `BOOTSTRAP_ADMIN_EMAIL` 创建或确定首个管理员；
-5. 将全部历史项目、资产和现有模型配置归属该管理员；
+4. 通过一次性离线 bootstrap CLI 安全创建首个管理员；
+5. 将全部历史项目和资产归属该管理员；模型配置按自建模型规格的 shared/private 确定性映射迁移；
 6. 验证没有 NULL 归属；
 7. 建立非空和复合唯一约束；
 8. 记录 migration 版本并退出维护模式。
 
 迁移脚本可重复运行，不重复复制或改写已归属数据。任何校验失败必须回滚并保留备份。
+
+Bootstrap 规则：
+
+- 只能在维护模式下运行离线命令，例如 `npm run admin:bootstrap -- --email <email>`；
+- 数据库已存在任意 active admin 时永久拒绝 bootstrap；
+- 不允许仅凭 `BOOTSTRAP_ADMIN_EMAIL` 自动提升已有账号；
+- 全新用户表时，CLI 创建 pending 管理员和一次性设置密码/验证 token，token 只在受保护终端显示一次；
+- 若邮箱已存在，CLI 生成需要邮箱所有权验证和一次性 bootstrap secret 的确认流程，不直接提升；
+- 管理员完成密码设置和邮箱验证后才激活并执行历史数据回填；
+- 明文初始密码不得写入环境变量、数据库或日志；
+- bootstrap 成功、失败和拒绝均写审计记录。
 
 ## 10. 管理能力
 
@@ -414,6 +492,8 @@ getAllProjects(userId)
 - 查看脱敏安全审计事件。
 
 管理员默认不能查看用户项目正文、提示词、响应内容或模型密钥。用户模拟登录、排障临时访问和客服代理操作不在本轮范围。
+
+系统必须始终保留至少一个 active admin：禁止禁用、删除或降级最后一个管理员。角色变化、共享模型密钥修改、禁用账号和强制他人退出要求最近 15 分钟内完成密码再认证，并记录变更前后值的脱敏审计。
 
 ## 11. 调用记录与未来权益扩展
 
@@ -446,18 +526,43 @@ CREATE TABLE model_usage_events (
 
 ## 12. Electron 与其他客户端
 
-Electron 不内嵌 PostgreSQL、认证系统或模型代理。首次运行要求配置 HTTPS 服务器地址，之后打开该服务器提供的 Web 应用或使用相同 API：
+Electron 不内嵌 PostgreSQL、认证系统或模型代理。首版只采用一种模式：本地设置页配置 HTTPS 服务器地址后，BrowserWindow 直接导航到该服务器提供的远端 Web 应用，使页面、Cookie 和 API 同源：
 
 - 服务器地址只允许 HTTPS；开发模式可允许 localhost HTTP；
 - 不允许携带 URL 用户名、密码或片段；
-- Cookie 由 Electron session 管理，不保存到 localStorage；
+- Cookie 由 Electron session 管理，不保存到 localStorage；业务页面不从随机 localhost origin 直接调用远端 API；
 - 服务器切换时清除旧 origin 的会话和用户缓存；
 - Electron origin/导航/新窗口必须限制到配置服务器和必要外链；
 - 证书错误不得自动忽略。
 
 Android 不在本轮实现和验收范围。API 不依赖 Electron 专有认证，以便后续单独设计移动端令牌机制。
 
-## 13. 运行安全
+## 13. 分阶段退出条件
+
+### 阶段 1：认证基础
+
+- 注册、验证、登录、退出、重置、session、CSRF、CORS、限流和 bootstrap 测试通过；
+- 除 auth/health 外的 API 已能挂载统一认证中间件；
+- 仅内部环境验收，不公开上线。
+
+### 阶段 2：业务数据隔离
+
+- `projects`、`assets`、`user_settings` 完成 user ID 迁移；
+- 所有 CRUD 使用复合主键和 `req.auth.userId`；
+- 两用户越权测试和历史数据恢复演练通过；
+- 旧 `/api/config/:key` 删除；
+- AI 入口保持关闭，旧 `/api/ai-forward` 不对普通用户或公网开放；
+- 仍不作为完整公网 AI 产品发布。
+
+### 阶段 3：权益与安全模型平台
+
+- VIP、共享/私有模型、服务端密钥、安全网关、job、usage 和审计完成；
+- 浏览器旧配置完成用户确认导入或明确放弃；
+- 旧模型引用迁移完成；
+- 生产环境删除 `/api/ai-forward`；
+- 完整安全和三端验收后方可公开上线。
+
+## 14. 运行安全
 
 - 生产环境必须配置 HTTPS，应用本身信任反向代理设置需显式开启。
 - 设置 HSTS、CSP、`X-Content-Type-Options`、`Referrer-Policy` 和合理的 frame policy。
@@ -467,9 +572,9 @@ Android 不在本轮实现和验收范围。API 不依赖 Electron 专有认证�
 - 备份文件属于敏感数据，需加密和访问控制。
 - 会话清理、一次性令牌清理和 180 天审计清理使用定时任务。
 
-## 14. 特征测试与验收
+## 15. 特征测试与验收
 
-### 14.1 改造前特征测试
+### 15.1 改造前特征测试
 
 - 当前项目 CRUD 请求和 JSON 结构；
 - 当前资产 CRUD 请求和 JSON 结构；
@@ -479,11 +584,13 @@ Android 不在本轮实现和验收范围。API 不依赖 Electron 专有认证�
 
 这些测试锁定兼容输出，但不锁定“无认证”和“全局共享数据”等必须修复的不安全行为。
 
-### 14.2 认证测试
+### 15.2 认证测试
 
 - 邮箱规范化与唯一性；
-- Argon2id 密码哈希与错误密码；
-- 验证/重置令牌过期、单次使用和重放；
+- Argon2id 参数、dummy hash、needsRehash 与错误密码时序；
+- 验证/重置令牌原子消费、并发、过期、单次使用和重放；
+- outbox 快速返回、重试、退避和死信；
+- bootstrap 首次成功、已有管理员拒绝、已有邮箱确认和 token 单次使用；
 - 注册暂停；
 - Cookie 属性；
 - 会话过期、撤销、session version；
@@ -491,7 +598,7 @@ Android 不在本轮实现和验收范围。API 不依赖 Electron 专有认证�
 - 登录与邮件接口限流和账号枚举防护；
 - CSRF、Origin 和 CORS 拒绝路径。
 
-### 14.3 隔离测试
+### 15.3 隔离测试
 
 - 用户 A 无法列出、读取、覆盖或删除用户 B 的项目和资产；
 - 猜测 UUID 或自定义项目 ID 不能越权；
@@ -500,24 +607,27 @@ Android 不在本轮实现和验收范围。API 不依赖 Electron 专有认证�
 - 账号切换不复用前一用户缓存；
 - 并发创建相同业务 ID 不跨用户冲突。
 
-### 14.4 VIP 与管理测试
+### 15.4 VIP 与管理测试
 
 - 永久、限时、到期、撤销和禁用状态；
 - VIP 到期只阻止新受限调用，不影响已有内容；
 - 普通用户可调用管理员标记的免费模型；
 - 非管理员不能访问管理路由；
 - 管理员操作完整写入脱敏审计日志。
+- 最后一个 active admin 不能禁用/降级，高风险操作要求近期再认证；
 
-### 14.5 迁移测试
+### 15.5 迁移测试
 
 - 使用生产结构副本执行 migration；
-- 历史数据全部归属 bootstrap admin；
+- 历史项目和资产归属 bootstrap admin；内置模型迁为 shared，旧自定义模型迁为 admin private；
 - migration 重跑无重复副作用；
 - 失败事务回滚；
 - 备份恢复演练；
 - 升级后现有项目、资产和模型配置可读取。
+- 旧单列主键已替换为复合主键，upsert 不发生跨用户冲突；
+- 旧 `/api/config/:key` 已删除，设置 API 只接受允许键；
 
-## 15. 验收标准
+## 16. 最终验收标准
 
 - 用户可使用邮箱和密码注册、验证、登录、退出和重置密码。
 - 管理员可暂停注册，已有用户仍可登录。
@@ -533,7 +643,7 @@ Android 不在本轮实现和验收范围。API 不依赖 Electron 专有认证�
 - Electron 可连接同一 HTTPS 后端完成登录和业务访问。
 - 现有项目/资产业务结构和内置模型行为通过特征回归测试。
 
-## 16. 非目标
+## 17. 非目标
 
 - 手机号和短信验证码；
 - OAuth、微信、GitHub 等第三方登录；
