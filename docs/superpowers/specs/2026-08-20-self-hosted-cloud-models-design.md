@@ -1,447 +1,467 @@
-# 自建云端模型增量接入设计
+# 受认证保护的自建云端模型接入设计
 
-## 1. 背景与目标
+## 1. 背景与依赖
 
-漫剧工场目前通过模型注册表、Provider 配置和文本/图片/视频适配器接入多个云厂商模型。系统已经允许用户填写 Provider Base URL、API Key、模型名和 Endpoint，但实际调用仍依赖现有厂商协议、Bearer 鉴权和固定响应结构，因此尚不能稳定接入用户自行部署的云端模型服务。
+漫剧工场目前由浏览器保存模型注册表和密钥，并通过未认证的 `/api/ai-forward` 把客户端提交的任意 `targetUrl`、Header 和请求体转发到上游。该结构在公网环境中会形成匿名通用代理，也无法保证不同用户的模型配置和密钥隔离。
 
-本需求在不重构现有调用链的前提下，新增自建云端模型旁路，支持：
+本设计依赖《用户身份、访问控制与 VIP 权益设计》先行完成。所有模型调用必须建立在有效服务端会话、用户数据隔离、VIP/共享模型授权、审计和限流之上。
 
-- 自建文本模型；
-- 自建图片模型；
-- 自建同步视频模型；
-- 自建异步视频模型；
-- 统一网关承载三类模型；
-- 文本、图片、视频分别部署；
-- Provider 共享配置与单模型覆盖配置；
-- 无鉴权、Bearer Token、自定义 API Key Header 三种鉴权方式。
+目标是在保持现有内置模型业务行为的前提下，支持用户自行部署的文本、图片、同步视频和异步视频模型；支持统一网关或分别部署；支持 Provider 默认配置、单模型覆盖及无鉴权、Bearer Token、自定义 API Key Header。
 
-本设计的首要约束是现有系统稳定性。内置模型和已有自定义模型继续使用原调用逻辑；只有显式选择自建协议预设的新模型才进入新适配器。
+## 2. 稳定性与安全原则
 
-## 2. 设计原则
+### 2.1 保留业务语义，不保留不安全传输契约
 
-### 2.1 稳定优先
+- 现有内置模型的提示词、参数、响应解析和厂商特殊模式尽量保持不变。
+- 不借本需求统一或重写所有厂商 Adapter。
+- 先为现有文本、图片和视频请求建立 golden/characterization tests。
+- 新自建协议使用独立模块。
+- 公网安全要求优先于旧代理契约；未认证任意转发接口必须下线。
 
-- 不重写现有 `geminiService.ts` 和内置厂商适配逻辑。
-- 不改变现有模型字段的含义。
-- 不要求旧配置整体迁移。
-- 新路径失败不得改变旧路径行为。
-- 每个新增字段均为可选字段；缺失时按旧逻辑处理。
+### 2.2 服务端拥有模型资源和密钥
 
-### 2.2 增量接入
+- 前端只提交 `modelId`、操作名和业务参数。
+- 服务端从登录会话确定 user ID，验证模型归属、共享授权和 VIP 权益。
+- 服务端解析 Provider、固定 Endpoint 和鉴权，并注入上游凭证。
+- 前端不能提交上游 Base URL、任意目标 URL、上游 Authorization 或自定义鉴权 Header。
 
-模型是否进入自建旁路，由 `protocolPreset` 是否存在决定：
+### 2.3 协议预设而非通用编排
 
 ```ts
-type SelfHostedProtocolPreset =
+type ProtocolPreset =
   | 'openai-chat'
   | 'openai-image'
   | 'openai-video-sync'
   | 'openai-video-async';
 ```
 
-- 无 `protocolPreset`：使用现有调用路径。
-- 有 `protocolPreset`：使用新增的自建模型适配器。
+第一版不支持任意 JSON 模板、脚本、JSONPath、动态 Header 或通用 API 编排。无法满足预设协议的服务需在自有网关完成转换，或以后新增经过审查的专用适配器。
 
-不额外引入必须迁移的 `source` 字段，避免与已有 `isBuiltIn`、自定义模型逻辑重复。
-
-### 2.3 明确协议边界
-
-第一版只支持预定义的 OpenAI 风格协议，不提供任意请求 JSON、脚本、JSONPath 或通用 API 编排能力。无法满足预设协议的服务需要在其网关侧完成协议转换，或后续以独立适配器扩展。
-
-## 3. 方案选择
-
-本次采用“协议预设适配层”方案。
-
-未采用的方案：
-
-- 在现有适配器中继续增加厂商条件判断：改动看似较少，但会进一步耦合旧逻辑，增加回归风险。
-- 通用 API 编排器：覆盖面广，但配置、安全、验证和维护成本过高，不适合本轮范围。
-
-## 4. 总体架构
-
-业务层接口保持不变：
-
-```ts
-chat(options)
-generateImage(options)
-generateVideo(options)
-```
-
-调用分流如下：
+## 3. 总体架构
 
 ```text
-业务调用
-  -> 获取当前激活模型
-  -> 检查 protocolPreset
-       |- 未配置：进入原有适配器和厂商逻辑
-       `- 已配置：解析自建有效配置
-                    -> 构造鉴权 Header
-                    -> 选择自建协议适配器
-                    -> 经现有 /api/ai-forward 代理调用
-                    -> 标准化并返回现有业务可消费的结果
+Web / Electron
+  -> 已认证业务请求（Cookie + CSRF）
+  -> POST /api/ai/models/{modelId}/{operation}
+  -> 会话、状态、VIP/共享授权、限流
+  -> 加载用户或共享模型
+  -> 解析 Provider 与模型覆盖
+  -> 解密服务端凭证
+  -> 固定协议 Adapter 构造上游请求
+  -> 安全上游 HTTP Client
+  -> 标准化结果或创建服务端任务记录
+  -> 用量记录与脱敏审计
 ```
 
-新代码以独立模块承载，不把协议判断继续堆入现有厂商实现。现有调用入口只增加最小分流判断。
+调用者不能选择服务器未保存的 origin。状态轮询和结果下载使用服务端生成的 job ID，不接受任意资源 URL。
 
-## 5. 配置模型
+## 4. 必要的现有系统触点
 
-### 5.1 鉴权配置
+“稳定优先”不再表述为完全零改动。公网安全和真实业务接入要求以下受控修改：
+
+1. `storageService`：所有 API 请求携带 Cookie/CSRF，401 时清理用户状态。
+2. `modelRegistry`：前端只保存非敏感模型元数据；移除密钥 localStorage 持久化；自建模型不受旧关键词清理规则影响。
+3. `apiClient`：从任意 URL 转发改为 `modelId + operation` 请求，并贯通 AbortSignal。
+4. `geminiService`：在实际使用的文本、流式文本、图片和视频入口最前面按协议预设分流；内置模型原有请求构造逻辑由特征测试保护。
+5. `services/adapters/*`：新自建协议独立实现；旧 Adapter 仅做调用安全传输层所需的最小调整。
+6. `server`：新增用户级 Provider/Model/密钥存储、安全模型网关、任务记录、HTTP 安全策略和用量记录。
+7. Electron：连接同一个 HTTPS 后端，不内嵌模型代理或数据库。
+
+真实业务分流至少覆盖普通文本、JSON 文本、续写/改写流式 helper、角色/场景/关键帧图片、同步视频和异步视频。
+
+自建文本第一版不提供真正流式上游转发。现有流式业务选择 `openai-chat` 时使用非流式请求，完成后一次性调用现有回调；UI 明确该模型不提供逐字输出。内置模型原流式行为不变。
+
+## 5. 服务端数据模型
+
+### 5.1 Providers
+
+```sql
+CREATE TABLE model_providers (
+  id UUID PRIMARY KEY,
+  owner_user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  scope VARCHAR(16) NOT NULL CHECK (scope IN ('private', 'shared')),
+  name VARCHAR(120) NOT NULL,
+  base_url TEXT NOT NULL,
+  auth_type VARCHAR(32) NOT NULL CHECK (
+    auth_type IN ('none', 'bearer', 'api-key-header')
+  ),
+  auth_header_name VARCHAR(128),
+  credential_ciphertext BYTEA,
+  credential_iv BYTEA,
+  credential_tag BYTEA,
+  credential_key_id VARCHAR(64),
+  timeout_ms INTEGER,
+  enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CHECK (
+    (scope = 'private' AND owner_user_id IS NOT NULL)
+    OR (scope = 'shared' AND owner_user_id IS NULL)
+  )
+);
+```
+
+只有管理员可创建 `shared` Provider。VIP 用户只能创建自己的 `private` Provider。
+
+### 5.2 Models
+
+```sql
+CREATE TABLE models (
+  id UUID PRIMARY KEY,
+  provider_id UUID NOT NULL REFERENCES model_providers(id) ON DELETE CASCADE,
+  owner_user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  scope VARCHAR(16) NOT NULL CHECK (scope IN ('private', 'shared')),
+  name VARCHAR(120) NOT NULL,
+  api_model VARCHAR(255) NOT NULL,
+  capability VARCHAR(16) NOT NULL CHECK (
+    capability IN ('chat', 'image', 'video')
+  ),
+  adapter_kind VARCHAR(64) NOT NULL,
+  protocol_preset VARCHAR(64),
+  endpoint_path TEXT NOT NULL,
+  base_url_override TEXT,
+  auth_override_type VARCHAR(32),
+  auth_override_header_name VARCHAR(128),
+  auth_override_ciphertext BYTEA,
+  auth_override_iv BYTEA,
+  auth_override_tag BYTEA,
+  auth_override_key_id VARCHAR(64),
+  timeout_ms INTEGER,
+  capabilities JSONB NOT NULL DEFAULT '{}',
+  protocol_config JSONB NOT NULL DEFAULT '{}',
+  access_level VARCHAR(16) NOT NULL CHECK (
+    access_level IN ('verified', 'vip', 'admin')
+  ),
+  enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CHECK (
+    (scope = 'private' AND owner_user_id IS NOT NULL)
+    OR (scope = 'shared' AND owner_user_id IS NULL)
+  ),
+  CHECK (
+    auth_override_type IS NULL
+    OR auth_override_type IN ('none', 'bearer', 'api-key-header')
+  )
+);
+```
+
+- `adapter_kind` 标识现有专用 Adapter 或自建协议 Adapter。
+- `protocol_preset` 只用于自建协议。
+- 共享模型只能引用共享 Provider。
+- `access_level` 控制共享模型调用权益。
+- 私有模型只允许 owner 调用，创建和调用均要求有效 VIP。
+
+### 5.3 异步任务
+
+```sql
+CREATE TABLE model_jobs (
+  id UUID PRIMARY KEY,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  model_id UUID NOT NULL REFERENCES models(id),
+  upstream_task_id TEXT,
+  upstream_resource_id TEXT,
+  status VARCHAR(32) NOT NULL,
+  result_origin TEXT,
+  result_url_ciphertext BYTEA,
+  result_url_iv BYTEA,
+  result_url_tag BYTEA,
+  result_url_key_id VARCHAR(64),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  expires_at TIMESTAMPTZ NOT NULL
+);
+```
+
+只向前端暴露内部 job UUID。上游 task ID、resource ID 和结果 URL 不能成为客户端选择目标的依据。
+
+上游 task/resource ID 可能包含租户信息，日志中必须掩码；带签名结果 URL 使用与模型凭证相同的 AEAD 机制加密，或只保存在受限对象存储任务元数据中。
+
+## 6. 凭证所有权与加密
+
+模型凭证使用应用层 AES-256-GCM 加密，主密钥来自部署环境或密钥管理服务：
+
+```env
+MODEL_CREDENTIAL_KEY_ID=v1
+MODEL_CREDENTIAL_KEY_BASE64=
+```
+
+- 数据库分别保存 ciphertext、IV、tag 和 key ID。
+- 主密钥不进入数据库、API 响应或日志。
+- 生产环境缺少有效主密钥时，服务拒绝启动模型网关。
+- 密钥轮换使用显式任务；读取阶段允许当前密钥和有限旧密钥集合。
+
+配置 GET 只返回鉴权类型、`credentialConfigured` 和掩码。更新使用显式动作：
 
 ```ts
-type AuthType = 'none' | 'bearer' | 'api-key-header';
-
-interface ModelAuthConfig {
-  type: AuthType;
-  credential?: string;
-  headerName?: string;
-}
+type CredentialUpdate =
+  | { action: 'keep' }
+  | { action: 'replace'; value: string }
+  | { action: 'remove' };
 ```
 
-约束：
+### 6.1 鉴权真值表
 
-- `none` 不发送认证 Header，也不要求 API Key。
-- `bearer` 使用 `Authorization: Bearer <credential>`。
-- `api-key-header` 使用用户配置的 `headerName`；Header 名必须通过合法名称校验。
-- `credential` 和 `headerName` 不允许被写入运行日志。
+| 模型覆盖 | Provider | 结果 |
+|---|---|---|
+| `none` | 任意 | 不发送鉴权并终止回退 |
+| `bearer` + credential | 任意 | 模型 Bearer |
+| `api-key-header` + credential/header | 任意 | 模型自定义 Header |
+| 未覆盖 | `none` | 不发送鉴权 |
+| 未覆盖 | `bearer` + credential | Provider Bearer |
+| 未覆盖 | `api-key-header` + credential/header | Provider 自定义 Header |
+| 配置不完整 | 任意 | 保存或调用时 fail closed |
 
-### 5.2 Provider 增量字段
+自建路径不使用其他 Provider Key、旧 `mixed` 模式或全局 Key 兜底。上游鉴权只发送到最终有效 Provider origin；跨 origin 重定向默认拒绝且绝不携带原鉴权。
 
-在现有 `ModelProvider` 上增加可选字段：
+## 7. 有效配置与 URL 规则
 
-```ts
-interface ModelProvider {
-  // 现有字段保持不变
-  auth?: ModelAuthConfig;
-  timeoutMs?: number;
-}
-```
+解析优先级为“模型覆盖 > 所属 Provider > 协议默认值”。
 
-现有 `apiKey` 保留。没有 `auth` 的 Provider 继续按旧逻辑使用 `apiKey` 和 Bearer Header。
+- Base URL 必须是绝对 `https:`；开发环境可允许 localhost `http:`。
+- URL 禁止 username、password 和 fragment。
+- Endpoint 必须以 `/` 开头，只能是相对路径，禁止 scheme 和 authority。
+- Base URL 可包含固定路径前缀；使用统一 URL builder，不能简单字符串拼接。
+- 模板只允许 `{taskId}`、`{resourceId}`，值作为单一 path segment 编码。
+- 模型 Base URL override 受同一管理员网络策略约束。
 
-### 5.3 Model 增量字段
+视频同步/异步由 `protocol_preset` 唯一决定。保存时校验模型类型与 preset 映射；旧 `params.mode` 仅服务旧 Adapter，不参与自建协议分流。
 
-在模型基础定义上增加：
+## 8. 协议预设线格式
 
-```ts
-interface ModelDefinitionBase {
-  // 现有字段保持不变
-  protocolPreset?: SelfHostedProtocolPreset;
-  baseUrlOverride?: string;
-  authOverride?: ModelAuthConfig;
-  timeoutMs?: number;
-}
-```
+### 8.1 `openai-chat`
 
-视频异步模型增加：
-
-```ts
-interface SelfHostedVideoAsyncConfig {
-  statusEndpoint?: string;
-  contentEndpoint?: string;
-  pollingIntervalMs?: number;
-  maxPollingTimeMs?: number;
-}
-```
-
-端点模板允许 `{taskId}` 和 `{resourceId}` 两个受控占位符，不执行任意表达式。
-
-### 5.4 有效配置解析
-
-自建模型的解析优先级为：
-
-```text
-模型覆盖值 > 所属 Provider 值 > 协议预设默认值
-```
-
-Base URL：
-
-```text
-model.baseUrlOverride > provider.baseUrl
-```
-
-鉴权：
-
-```text
-model.authOverride > provider.auth > 旧 apiKey 的 Bearer 兼容映射
-```
-
-超时：
-
-```text
-model.timeoutMs > provider.timeoutMs > 协议默认超时
-```
-
-自建路径禁止从其他 Provider 获取凭证。全局 API Key 只有在所属 Provider 没有新式鉴权、没有 `apiKey`，并且用户当前全局 Key 模式明确允许时才可沿用，以保持旧配置兼容。新建自建 Provider 默认使用自身鉴权配置。
-
-## 6. 协议预设
-
-### 6.1 文本：`openai-chat`
-
-默认端点：`/v1/chat/completions`。
-
-请求采用 OpenAI Chat Completions 非流式格式，包含 `model`、`messages`、`temperature`、`max_tokens` 等现有业务参数。JSON 输出模式在服务声明支持时发送 `response_format`；否则继续依赖提示词约束并清理 Markdown 代码块。
-
-成功响应从 `choices[0].message.content` 读取。缺少该字段时返回明确的协议不兼容错误。
-
-第一版不增加流式输出，避免改变现有剧本解析和结构化 JSON 调用。
-
-### 6.2 图片：`openai-image`
-
-默认端点：`/v1/images/generations`。
-
-纯文生图使用 JSON 请求：
+默认端点 `/v1/chat/completions`，固定非流式请求：
 
 ```json
 {
   "model": "configured-model-name",
-  "prompt": "prompt text",
+  "messages": [
+    {"role": "system", "content": "optional system prompt"},
+    {"role": "user", "content": "prompt"}
+  ],
+  "temperature": 0.7,
+  "max_tokens": 8192,
+  "stream": false
+}
+```
+
+可选 capability `supportsJsonResponseFormat`；为 true 且业务要求 JSON 时发送 `response_format: {type: 'json_object'}`。成功响应必须包含 `choices[0].message.content` 字符串。
+
+### 8.2 `openai-image`
+
+```ts
+interface OpenAiImageProtocolConfig {
+  generationEndpoint: string; // /v1/images/generations
+  editEndpoint: string;       // /v1/images/edits
+  maxReferenceImages: number; // 0..16
+  responseFormat: 'b64_json' | 'url';
+}
+```
+
+无参考图时向 generation endpoint 发送 JSON：
+
+```json
+{
+  "model": "configured-model-name",
+  "prompt": "prompt",
   "size": "1280x720",
   "n": 1,
   "response_format": "b64_json"
 }
 ```
 
-存在参考图时使用 `multipart/form-data`，发送 `model`、`prompt`、`image` 和 `size`。模型能力配置决定是否允许参考图、多张参考图及支持的画面比例；不支持时在发起网络请求前提示用户。
+有参考图时向 edit endpoint 发送 multipart；字段为 `model`、`prompt`、`size`、`response_format`，每张图片以重复 `image` 字段按原顺序发送。文件必须通过 MIME、数量和解码后大小校验。
 
-响应按固定兼容集合解析：
+响应支持 `data[0].b64_json`、`data[0].url`、`output[0].url` 或直接 `image/*` 二进制。结果 URL 通过受控下载流程获取，不由浏览器任意直连。
 
-- `data[0].b64_json`；
-- `data[0].url`；
-- `output[0].url`；
-- `image/*` 二进制响应。
+### 8.3 `openai-video-sync`
 
-结果统一转换为现有业务可消费的 URL 或 Data URL。自建图片模型不再被强制发送到 `/v1/chat/completions`；原有特殊图片模型仍走旧路径。
+默认端点 `/v1/videos/generations`，发送固定 JSON：
 
-### 6.3 同步视频：`openai-video-sync`
-
-默认端点：`/v1/videos/generations`。
-
-请求包含 `model`、`prompt`、`size`、`duration`，有起始帧时增加 `image_url`。结束帧只在模型能力明确支持时发送。
-
-响应按固定兼容集合解析：
-
-- `data[0].url`；
-- `data[0].b64_json`；
-- `url`；
-- `video_url`；
-- `video/*` 二进制响应。
-
-### 6.4 异步视频：`openai-video-async`
-
-默认端点：
-
-- 创建：`POST /v1/videos`；
-- 状态：`GET /v1/videos/{taskId}`；
-- 内容：`GET /v1/videos/{resourceId}/content`。
-
-创建响应中的任务 ID 依次识别 `id`、`task_id`。状态依次识别 `status`，并支持：
-
-- 等待状态：`queued`、`pending`、`processing`、`running`；
-- 成功状态：`completed`、`succeeded`；
-- 失败状态：`failed`、`error`、`cancelled`。
-
-成功结果依次识别：
-
-- `url`、`video_url`、`download_url`；
-- `output.url`；
-- `video_id`、`output.id`、`id`。
-
-错误信息依次识别 `error.message`、`message`、字符串形式的 `error`。
-
-若状态响应直接提供 URL，则直接下载；否则使用结果 ID 访问内容端点。下载响应可为视频二进制，也可为包含 URL 的 JSON。
-
-默认轮询间隔为 5 秒，最小允许 1 秒；默认最长等待 20 分钟，最大允许 60 分钟。前端取消操作和页面请求终止必须传播到代理请求。
-
-## 7. 用户界面
-
-### 7.1 Provider 配置
-
-在现有 Provider 管理区域增加自建服务字段：
-
-- 服务名称；
-- Base URL；
-- 鉴权方式；
-- 凭证；
-- 自定义 Header 名；
-- 默认超时；
-- 保存；
-- Provider 连通性检查。
-
-Provider 连通性检查只验证 URL、代理连通性和鉴权可达性，不假设固定模型名。即使上游返回 404 或 405，只要能证明到达目标服务，也应与 DNS、TLS、超时错误区分展示。
-
-### 7.2 Model 配置
-
-新增“自建云端模型”创建入口，配置：
-
-- 模型类型；
-- 展示名称；
-- API 模型名；
-- 所属 Provider；
-- 协议预设；
-- Endpoint；
-- 能力参数；
-- 模型级 Base URL 覆盖；
-- 模型级鉴权覆盖；
-- 模型级超时。
-
-模型级覆盖放在“高级配置”中，默认关闭，避免普通配置流程过于复杂。
-
-视频异步模式额外配置状态端点、内容端点、轮询间隔和最大等待时间。
-
-### 7.3 模型测试
-
-- 文本模型：发送最小提示词并验证 `choices[0].message.content`。
-- 图片模型：触发一次最小图片生成。
-- 视频模型：触发一次最短时长视频生成并完成结果解析。
-
-图片和视频测试可能产生费用，必须由用户主动触发，并在发送前显示明确提示。保存配置不自动发起生成请求。
-
-## 8. 错误处理
-
-自建适配器将错误分为：
-
-- 配置错误：Base URL、Endpoint、Header 名、模型名或能力参数无效；
-- 鉴权错误：401、403；
-- 协议错误：成功 HTTP 响应中缺少预期字段；
-- 上游错误：上游返回的 4xx、5xx；
-- 网络错误：DNS、TLS、连接失败；
-- 超时和取消；
-- 异步任务失败或超过最长等待时间；
-- 代理安全策略拒绝。
-
-错误消息需包含模型显示名称、阶段和可操作建议，但不得包含凭证、完整请求体或大段 Base64。
-
-重试只用于网络错误、429 和部分 5xx。401、403、配置错误及协议错误不得自动重试。异步状态查询的短暂失败可继续轮询，但必须受连续失败次数和总超时限制。
-
-## 9. 后端代理安全
-
-继续复用 `/api/ai-forward` 及其请求格式，避免改变现有前端调用契约。增量增加以下校验：
-
-- 仅允许 `http:`、`https:`；
-- 拒绝带用户名或密码的 URL；
-- 限制允许的 HTTP Method；
-- 移除 `Host`、`Connection`、`Content-Length`、`Transfer-Encoding` 等逐跳或危险 Header；
-- 默认拒绝云元数据地址、环回、链路本地和私有网络；
-- 每次 DNS 解析和重定向后重新校验目标地址；
-- 限制重定向次数；
-- 设置连接、响应和总请求超时；
-- 日志对 Authorization、自定义鉴权 Header、Base64 和大请求体脱敏。
-
-公网自建服务默认可用。局域网、本机或 Docker 内部模型服务需由部署管理员显式设置：
-
-```env
-AI_PROXY_ALLOW_PRIVATE_NETWORK=true
+```json
+{
+  "model": "configured-model-name",
+  "prompt": "prompt",
+  "size": "1280x720",
+  "duration": 8,
+  "image_url": "optional start-frame data URL",
+  "end_image_url": "optional end-frame data URL"
+}
 ```
 
-为降低对现有部署的影响，安全拒绝应返回独立错误码和中文说明。部署文档必须列出 Docker 容器访问宿主机模型服务时的地址配置方式。
+起止帧字段只在 capability 声明支持时发送。响应支持 `data[0].url`、`data[0].b64_json`、`url`、`video_url` 或直接 `video/*` 二进制。
 
-## 10. 数据存储与隐私
+### 8.4 `openai-video-async`
 
-本轮延续现有模型注册表持久化方式，不借此需求迁移存储系统。文档和 UI 必须与实际行为一致：模型配置目前由业务后端持久化，不应继续宣称“仅保存在本地浏览器”。
+```ts
+interface OpenAiVideoAsyncProtocolConfig {
+  createEndpoint: string;   // /v1/videos
+  statusEndpoint: string;   // /v1/videos/{taskId}
+  contentEndpoint: string;  // /v1/videos/{resourceId}/content
+  pollingIntervalMs: number;
+  maxPollingTimeMs: number;
+}
+```
 
-要求：
+创建使用与同步视频相同的固定 JSON。创建响应识别 `id`、`task_id`。状态字段为 `status`：
 
-- 配置查看接口和诊断工具始终掩码凭证；
-- 代理日志不得记录凭证；
-- 前端密码输入框不回显完整凭证；
-- 删除 Provider 时仍按现有行为处理其所属模型，并在 UI 中二次确认；
-- 文档明确说明当前数据库凭证存储边界。
+- 等待：`queued`、`pending`、`processing`、`running`；
+- 成功：`completed`、`succeeded`；
+- 失败：`failed`、`error`、`cancelled`。
 
-服务端密钥引用、操作系统密钥链或数据库字段加密属于后续安全增强，不纳入本轮实现，以避免扩大修改范围。
+结果依次识别 `url`、`video_url`、`download_url`、`output.url`、`video_id`、`output.id`、`id`；错误识别 `error.message`、`message`、字符串 `error`。缺少字段视为协议错误。
 
-## 11. 向后兼容与迁移
+默认轮询 5 秒，最小 1 秒；默认总等待 20 分钟，最大 60 分钟。前端只轮询内部 job API。
 
-本轮不对所有旧配置执行强制版本迁移。
+## 9. 安全模型网关 API
 
-- 旧模型没有 `protocolPreset`，继续走旧路径。
-- 旧 Provider 没有 `auth`，继续使用现有 `apiKey` 语义。
-- 现有内置模型不自动添加 `protocolPreset`。
-- 现有自定义模型不自动改为自建协议，避免误判其返回格式。
-- 用户只有在编辑模型并明确选择协议预设后，模型才切换到新路径。
-- 删除新字段或回退版本后，旧字段仍可被旧版本读取。
+```text
+POST /api/ai/models/{modelId}/chat
+POST /api/ai/models/{modelId}/images
+POST /api/ai/models/{modelId}/videos
+GET  /api/ai/jobs/{jobId}
+POST /api/ai/jobs/{jobId}/cancel
+GET  /api/ai/jobs/{jobId}/content
+POST /api/ai/models/{modelId}/test
+```
 
-如新模型配置不完整，保存时拒绝并说明缺少字段，不允许静默回退到其他 Provider 或旧适配器。
+共同处理顺序：验证会话/邮箱/CSRF；加载模型；验证 owner/shared/VIP/enabled；应用限流；校验参数和媒体；解析固定 Provider/Endpoint；解密并注入凭证；安全调用上游；记录脱敏 usage/audit；返回标准结果或内部 job ID。
 
-## 12. 文档交付
+旧 `/api/ai-forward` 在前端完成切换后删除。过渡期只能在非生产环境通过显式 flag 启用并要求管理员认证；生产启动检测到该 flag 时拒绝启动。
 
-实现前后需要维护以下文档：
+## 10. 上游 HTTP 安全
 
-1. 本设计文档；
-2. 实施计划；
-3. 自建云端模型配置指南；
-4. 协议兼容规范，包含四类请求和响应示例；
-5. Web、Docker、Electron 部署说明；
-6. 公网、私网和宿主机网络说明；
-7. 常见错误排查指南。
+### 10.1 网络策略
 
-## 13. 测试策略
+- 公网 HTTPS 默认允许；HTTP 只允许开发环境 localhost。
+- 私网、环回、链路本地和保留地址默认拒绝。
+- 管理员可配置精确域名、IP 或 CIDR allowlist；普通用户不能修改。
+- 云元数据地址和已知 metadata hostname 永久拒绝。
+- 规范化 IPv4、IPv6、IPv4-mapped IPv6 和特殊数字表示后判断。
+- 域名全部 A/AAAA 结果都必须符合策略。
 
-### 13.1 单元测试
+### 10.2 DNS 与重定向
 
-- 有效配置解析及覆盖优先级；
-- 三种鉴权 Header 构造；
-- 无鉴权模型可用性；
-- URL 和端点模板校验；
-- 文本响应解析；
-- 图片 URL、Base64、二进制响应解析；
-- 同步视频响应解析；
-- 异步任务 ID、状态、结果和错误解析；
-- 超时、取消和重试分类；
-- 旧模型没有 `protocolPreset` 时的分流结果。
+- 手动重定向并限制最大跳数。
+- 每跳重新解析、执行网络策略和 origin 策略。
+- 连接固定到已校验 IP，同时保留 hostname 用于 Host/TLS SNI，消除 DNS 重绑定窗口。
+- 跨 origin 重定向默认拒绝；无鉴权结果下载也必须重新校验且不得携带原凭证。
 
-### 13.2 代理测试
+### 10.3 Header、超时和大小
 
-- 允许公网 HTTP/HTTPS；
-- 拒绝非法协议和 URL 凭证；
-- 默认拒绝云元数据、环回、链路本地和私有地址；
-- 显式开启后允许私网；
-- 重定向目标重新校验；
-- 敏感 Header 和日志脱敏。
+上游 Header 由服务器 Adapter 生成。禁止客户端传 Authorization、Cookie、Host、逐跳 Header、Forwarded 系列和预设外 Header。
 
-### 13.3 回归测试
+每个请求定义连接、Headers、Body idle 和总超时；浏览器 AbortSignal 贯通同步调用。异步任务不因页面断开自动取消，只响应显式 cancel。Nginx 与应用超时必须形成一致预算。请求体、单文件、文件数、Base64 解码后数据、错误体和最终媒体均有限制；二进制使用流式转发或受限对象存储，不使用无上限 `arrayBuffer()`。
 
-- 现有文本模型仍可完成普通文本和 JSON 调用；
-- 现有图片模型仍可生成资产；
-- 现有同步和异步视频模型仍可工作；
-- 原有 Provider、模型启用状态和激活模型不丢失；
-- 现有 Vitest 测试通过；
-- 生产构建通过。
+### 10.4 日志
 
-### 13.4 三端验证
+只记录 request ID、用户 ID、模型 ID、目标 origin、operation、状态、耗时和字节数。不得记录完整查询值、Header 值、Cookie、CSRF、密码、模型凭证、正文、完整提示词、Base64、签名 URL 或生产 stack。
 
-- Web 开发环境；
-- Docker Compose 部署；
-- Electron 桌面端。
+## 11. UI 与用户流程
 
-网络条件允许时使用兼容服务做实际冒烟测试；自动化测试使用本地 Mock Server，避免依赖外部模型和产生费用。
+- VIP 用户可创建私有 Provider 和私有模型；管理员可创建共享 Provider/模型。
+- 凭证只显示“已配置”，编辑时选择保持、替换或删除。
+- 自建模型使用独立 draft editor，一次 Save 原子校验，避免半配置状态。
+- 高级 Base URL/鉴权/超时覆盖默认折叠。
+- 共享模型配置 `verified`、`vip`、`admin` 访问级别。
+- Provider 测试区分 DNS、TLS、HTTP 可达；404/405 不能表示鉴权成功。
+- 图片/视频模型测试可能收费，必须主动确认；保存不自动生成。
 
-## 14. 验收标准
+## 12. 兼容与迁移
 
-- 可以创建一个统一 Provider，并挂载文本、图片、同步或异步视频模型。
-- 可以为三种能力分别创建独立 Provider。
-- 单模型可以覆盖 Base URL、鉴权、Endpoint 和超时。
-- 支持无鉴权、Bearer Token、自定义 API Key Header。
-- 文本模型可完成剧本生成所需的普通文本和 JSON 响应。
-- 图片模型可解析 URL、Base64 和图片二进制。
-- 同步视频模型可解析 URL、Base64 和视频二进制。
-- 异步视频模型可创建任务、轮询状态并下载结果。
-- 旧模型未配置新字段时行为不变。
-- 凭证不跨 Provider 自动串用。
-- 图片和视频测试不会在保存配置时自动触发。
-- 默认阻止敏感内网和云元数据目标，管理员可显式允许私网。
-- 现有测试、生产构建和三端冒烟验证通过。
+### 12.1 旧注册表迁移
 
-## 15. 非目标
+1. 备份现有 `config`；
+2. 将 Provider、模型和 Key 归属 bootstrap admin；
+3. 加密写入正规化表；
+4. 内置模型标记专用 `adapter_kind`；
+5. 保存旧 ID 到新 UUID 映射并迁移激活模型；
+6. 验证文本、图片、同步/异步视频 golden tests；
+7. 前端响应移除完整密钥；
+8. 清除浏览器旧密钥缓存。
 
-本轮不包含：
+### 12.2 关键词清理
 
-- 任意请求模板、脚本或 JSONPath 映射；
+现有按 ID 包含 `gpt`、`claude`、`gemini`、`sora`、`veo` 删除模型的规则不得作用于正规化模型。迁移只针对明确废弃内置 ID，不按关键词删除用户模型。测试覆盖这些名称的保存、重载和激活。
+
+### 12.3 旧代理下线
+
+生产开放前，代码搜索和运行测试必须证明没有前端路径发送 `targetUrl` 或上游鉴权 Header。之后删除 `/api/ai-forward`，路由测试确认 404。
+
+## 13. Electron
+
+Electron 使用用户配置的同一个 HTTPS 后端；登录、Cookie、CSRF、VIP、Provider、模型和任务 API 与 Web 一致。不打包 Express 网关、PostgreSQL 或模型密钥，不提供本地任意代理。服务器切换清理旧会话，证书错误不自动忽略，导航限制到配置服务器和必要外链。Android 不在本轮范围。
+
+## 14. 测试策略
+
+### 14.1 改造前特征测试
+
+- 现有文本、JSON、流式请求构造和响应解析；
+- 现有图片无参考图、多参考图调用；
+- 现有视频各模式创建、轮询、下载；
+- 当前激活模型和注册表重载；
+- 真实 Stage 页面入口 smoke tests。
+
+### 14.2 配置与权限
+
+- 私有资源 owner 隔离；共享资源管理员管理；
+- verified/VIP/admin access level；
+- VIP 到期阻止新调用但保留配置；
+- 凭证 keep/replace/remove 和掩码响应；
+- 鉴权真值表与 `none` fail-stop。
+
+### 14.3 协议 contract tests
+
+- 四类协议精确请求快照；
+- chat JSON 开关和非流式降级；
+- image generation/edit、多文件顺序/MIME/大小；
+- 同步视频起止帧能力；
+- 异步 ID、状态、错误、结果和超时；
+- URL、Base64、二进制响应和缺失字段错误。
+
+### 14.4 网关安全测试
+
+- 身份和权益矩阵；客户端不能提交目标或鉴权 Header；
+- 非法协议/URL/Endpoint；公网、私网 allowlist、元数据永久拒绝；
+- 多 A/AAAA、mapped IPv6、特殊 IP；DNS 连接绑定；
+- 同/跨 origin 重定向和 Header 剥离；
+- 大小、流式媒体、超时、取消；
+- 日志与 usage/audit 脱敏。
+
+### 14.5 回归与三端
+
+- 内置文本、图片和视频 golden tests；
+- Web、Docker 端到端测试；
+- Electron 连接 HTTPS 后端完成登录、模型选择和调用；
+- 生产环境不存在旧任意代理；
+- 自建协议使用本地受控 mock upstream 验证。
+
+## 15. 验收标准
+
+- 统一网关或独立服务均可配置文本、图片和视频模型。
+- Provider/Model 严格归属用户或管理员共享空间。
+- 单模型可覆盖 Base URL、鉴权、Endpoint 和超时。
+- 支持无鉴权、Bearer、自定义 API Key Header。
+- 前端读取不到完整凭证，不能控制任意目标或上游鉴权。
+- 四类协议通过 contract tests。
+- 用户不能调用其他用户私有模型；共享模型遵守访问级别。
+- 凭证不跨 Provider 或全局串用。
+- 私网只按管理员 allowlist 开放，云元数据永久拒绝。
+- 内置模型行为通过特征回归，自建常见模型名重载不消失。
+- Web、Docker、Electron 共享同一安全后端。
+- 生产环境不存在未认证任意转发接口。
+
+## 16. 非目标
+
+- 任意请求模板、脚本、JSONPath 或通用 API 编排；
 - OpenAI Responses API；
-- 文本流式输出；
-- 任意厂商私有协议自动识别；
-- 重构或统一现有所有厂商适配器；
-- 将旧自定义模型自动迁移为自建协议；
-- 密钥链、Vault 或数据库字段加密；
-- 模型服务的部署和运维管理。
+- 自建文本真正流式转发；
+- 自动识别任意厂商私有协议；
+- 统一重构现有所有厂商 Adapter；
+- 用户积分、计费、购买和兑换；
+- 用户自定义私网 allowlist；
+- Electron 内嵌数据库或代理；
+- Android 客户端。
 
-这些能力可在本轮稳定交付后按实际服务兼容需求单独设计。
+以上能力需要独立设计，不能在实现阶段顺带加入。
