@@ -299,6 +299,7 @@ CREATE TABLE model_invocations (
   id UUID PRIMARY KEY,
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   model_id UUID REFERENCES models(id) ON DELETE SET NULL,
+  model_id_snapshot UUID NOT NULL,
   operation VARCHAR(32) NOT NULL,
   idempotency_key VARCHAR(128) NOT NULL,
   request_hash CHAR(64) NOT NULL,
@@ -330,7 +331,7 @@ CREATE TABLE model_invocations (
 );
 ```
 
-`request_hash` 使用部署秘密 HMAC，而不是可字典枚举提示词的裸 SHA-256。所有收费调用（包括 chat 和 test）都必须要求 `Idempotency-Key`，并在向上游发出前落库 invocation；Chat/Test 的小结果使用 AEAD 加密字段保存，图片/视频保存 MediaRef。每个非空结果字段必须同时保存对应的 `*_key_id`；其 AAD 固定绑定 invocation、user、model、operation、结果字段名和 key ID，轮换后按显式 key ID 选择当前或受支持的旧密钥，不能遍历密钥或静默回退。响应丢失后的相同 key 读取原结果，不重复收费。上游成功但进程在结果落库前崩溃时进入 `submission_uncertain`，无上游幂等查询不得自动重提。异步 `model_jobs` 一对一引用 invocation；test 调用也使用相同机制。
+`request_hash` 使用部署秘密 HMAC，而不是可字典枚举提示词的裸 SHA-256。创建 invocation 时把当时的 `model_id` 复制到不可变的 `model_id_snapshot`（非 FK，之后永不更新）；所有结果 AAD 使用该快照而不是可被删除语义清空的可选 FK。所有收费调用（包括 chat 和 test）都必须要求 `Idempotency-Key`，并在向上游发出前落库 invocation；Chat/Test 的小结果使用 AEAD 加密字段保存，图片/视频保存 MediaRef。每个非空结果字段必须同时保存对应的 `*_key_id`；其 AAD 固定绑定 invocation、user、`model_id_snapshot`、operation、结果字段名和 key ID，轮换后按显式 key ID 选择当前或受支持的旧密钥，不能遍历密钥或静默回退。响应丢失后的相同 key 读取原结果，不重复收费。上游成功但进程在结果落库前崩溃时进入 `submission_uncertain`，无上游幂等查询不得自动重提。异步 `model_jobs` 一对一引用 invocation；test 调用也使用相同机制。
 
 ## 6. 凭证所有权与加密
 
@@ -661,7 +662,7 @@ GET/PATCH/DELETE /api/admin/shared-models/{modelId}
 - API 在该部署完成一次导入或管理员明确跳过后永久关闭；
 - 普通用户不能使用该迁移入口。
 
-迁移包使用独立、版本化的 AEAD envelope，仅允许这三个已知配置 key、项目内媒体/模型引用摘要和必要凭证。v1 envelope 至少包含 `format_version`、`kdf`（推荐 Argon2id 参数 `salt`、`memory_kib`、`iterations`、`parallelism`）、`nonce`、`ciphertext`、`tag` 和 `aad_context`；明文不含解密密钥。桥接版本导出时由管理员设置一次性迁移口令（不复用登录密码），口令只用于本地 Argon2id 派生包密钥，参数随 envelope 保存；导入时管理员在远端向导中再次输入口令，服务端仅在内存中解密并立即擦除口令/明文。若部署不允许口令输入，则改用一次性恢复密钥：导出端仅显示一次，用户通过独立安全渠道输入远端向导，恢复密钥绝不与文件同包。AAD 绑定部署迁移 ID、导出用户、格式版本和固定用途字符串；版本、KDF、tag 或 AAD 校验失败时拒绝导入并删除内存明文，不覆盖现有配置。导出文件由用户自行保管，导入成功后服务端和客户端都擦除临时副本。桥接版本的导出、远端版本的导入、错误口令、密钥丢失和失败恢复分别有端到端测试。
+迁移包使用独立、版本化的 AEAD envelope，仅允许这三个已知配置 key、项目内媒体/模型引用摘要和必要凭证。v1 envelope 至少包含 `format_version`、随机 `export_id`、`kdf`（推荐 Argon2id 参数 `salt`、`memory_kib`、`iterations`、`parallelism`）、`nonce`、`ciphertext`、`tag` 和 `aad_context`；明文不含解密密钥。由于旧 Electron 在导出时没有远端用户身份，`aad_context` 只绑定 `export_id`、格式版本和固定用途字符串，不伪造尚不存在的 deployment/user。桥接版本导出时由管理员设置一次性迁移口令（不复用登录密码），口令只用于本地 Argon2id 派生包密钥，参数随 envelope 保存；导入前管理员必须登录目标部署，服务端为该用户创建一次性导入事务并绑定目标 deployment/user、`export_id`、过期时间和审计记录，重复或跨事务使用一律拒绝。导入时管理员在远端向导中再次输入口令，服务端仅在内存中解密并立即擦除口令/明文。若部署不允许口令输入，则改用一次性恢复密钥：导出端仅显示一次，用户通过独立安全渠道输入远端向导，恢复密钥绝不与文件同包；该恢复密钥只可用于同一一次性导入事务。版本、KDF、tag、AAD、事务绑定或过期校验失败时拒绝导入并删除内存明文，不覆盖现有配置。导出文件由用户自行保管，导入成功后服务端和客户端都擦除临时副本。桥接版本的导出、远端版本的导入、错误口令、密钥丢失、跨部署重放和失败恢复分别有端到端测试。
 
 迁移报告逐项列出旧 ID、新 UUID、scope、owner、access level、credential 状态和项目引用数量，不显示完整密钥。
 
@@ -675,7 +676,7 @@ GET/PATCH/DELETE /api/admin/shared-models/{modelId}
 
 ### 12.4 删除与保留
 
-Provider/模型 API 默认执行软删除并立即禁止新调用。Job 和 usage 保存不可变模型快照，不因模型删除丢失；运行中 job 存在时拒绝物理删除。对象媒体、job、usage 和审计分别按管理员保留策略清理。
+Provider/模型 API 默认执行软删除并立即禁止新调用。Job、invocation 和 usage 保存不可变模型快照，不因模型删除丢失；运行中 job 或保留期内存在 invocation 时拒绝物理删除。只有相关 job/invocation/usage/audit 均超过保留期后才允许物理删除模型；`model_id` FK 可置空，但 `model_id_snapshot` 必须保留至对应 invocation 清理。对象媒体、job、usage 和审计分别按管理员保留策略清理。
 
 ## 13. Electron
 
@@ -736,7 +737,7 @@ Electron 首版只有一种模式：本地设置页配置服务器后，BrowserW
 - job credential version 和源媒体 refcount/版本保留；
 - media_assets owner、MIME、对象 key、配额、Range 和 content API 隔离；
 - 同步 invocation 在响应丢失重试时复用结果，裸提示词不能从 request hash 反推；
-- 结果密钥轮换后按 `*_key_id` 成功重放 Chat/Test 幂等结果，未知 key ID fail closed；
+- 结果密钥轮换后按 `*_key_id` 成功重放 Chat/Test 幂等结果，未知 key ID fail closed；模型物理删除后仍可用 `model_id_snapshot` 重放历史结果；
 - Electron 远端页面不能读取旧 localhost localStorage，受信导出/迁移窗口和 renderer hardening。
 - Electron 迁移 envelope 的口令 KDF/一次性恢复密钥独立交付、AAD 校验、错误清除和跨版本导入。
 
