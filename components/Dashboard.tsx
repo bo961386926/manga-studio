@@ -1,10 +1,11 @@
 // Author: forsearch | Updated: 2026-04-30
 import React, { useEffect, useState } from 'react';
-import { Plus, Trash2, Loader2, Folder, ChevronRight, Calendar, AlertTriangle, X, HelpCircle, Cpu, Archive, Search, Users, MapPin, Sun, Moon, Monitor } from 'lucide-react';
+import { Plus, Trash2, Loader2, Folder, ChevronRight, Calendar, AlertTriangle, X, HelpCircle, Cpu, Archive, Search, Users, MapPin, Sun, Moon, Monitor, LogOut, Layers, KeyRound, Eye, EyeOff } from 'lucide-react';
 import { ProjectState, AssetLibraryItem, Character, Scene } from '../types';
 import { getAllProjectsMetadata, createNewProjectState, deleteProjectFromDB, getAllAssetLibraryItems, deleteAssetFromLibrary, loadProjectFromDB, saveProjectToDB } from '../services/storageService';
 import { applyLibraryItemToProject } from '../services/assetLibraryService';
 import { useAlert } from './GlobalAlert';
+import { changePassword, fetchMe, logout, SessionUser } from '../services/authClient';
 
 interface Props {
   onOpenProject: (project: ProjectState) => void;
@@ -14,6 +15,7 @@ interface Props {
 
 const Dashboard: React.FC<Props> = ({ onOpenProject, onShowOnboarding, onShowModelConfig }) => {
   const { showAlert } = useAlert();
+  const [user, setUser] = useState<SessionUser | null>(null);
   const [projects, setProjects] = useState<ProjectState[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
@@ -23,6 +25,10 @@ const Dashboard: React.FC<Props> = ({ onOpenProject, onShowOnboarding, onShowMod
   const [libraryFilter, setLibraryFilter] = useState<'all' | 'character' | 'scene'>('all');
   const [assetToUse, setAssetToUse] = useState<AssetLibraryItem | null>(null);
   const [showLibraryModal, setShowLibraryModal] = useState(false);
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const [passwordForm, setPasswordForm] = useState({ current: '', next: '', confirm: '' });
+  const [isChangingPassword, setIsChangingPassword] = useState(false);
+  const [showPasswordValues, setShowPasswordValues] = useState(false);
   const [themeMode, setThemeMode] = useState<'auto' | 'light' | 'dark'>(() => {
     try {
       const t = localStorage.getItem('ai_manga_theme');
@@ -48,6 +54,29 @@ const Dashboard: React.FC<Props> = ({ onOpenProject, onShowOnboarding, onShowMod
     const next = themeMode === 'auto' ? 'light' : themeMode === 'light' ? 'dark' : 'auto';
     setThemeMode(next);
     applyThemeMode(next);
+  };
+
+  const handleChangePassword = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (passwordForm.next !== passwordForm.confirm) {
+      showAlert('两次输入的新密码不一致。', { type: 'warning' });
+      return;
+    }
+    if (new TextEncoder().encode(passwordForm.next).length < 10) {
+      showAlert('新密码至少需要 10 个字节。', { type: 'warning' });
+      return;
+    }
+    setIsChangingPassword(true);
+    try {
+      await changePassword(passwordForm.current, passwordForm.next);
+      setPasswordForm({ current: '', next: '', confirm: '' });
+      setShowPasswordModal(false);
+      showAlert('密码已修改，其他设备上的登录已退出。', { type: 'success' });
+    } catch (error) {
+      showAlert(error instanceof Error ? error.message : '修改密码失败', { type: 'error' });
+    } finally {
+      setIsChangingPassword(false);
+    }
   };
 
   const loadProjects = async () => {
@@ -76,6 +105,7 @@ const Dashboard: React.FC<Props> = ({ onOpenProject, onShowOnboarding, onShowMod
 
   useEffect(() => {
     loadProjects();
+    fetchMe().then((u) => setUser(u));
   }, []);
 
   useEffect(() => {
@@ -224,12 +254,71 @@ const Dashboard: React.FC<Props> = ({ onOpenProject, onShowOnboarding, onShowMod
             </nav>
           </div>
 
-          <div className="pt-6 border-t border-white/10 text-[10px] text-slate-500 font-mono leading-relaxed">
-            <p>左侧导航整合了项目创建、资产库和配置入口，方便快速切换。</p>
+          <div className="pt-6 border-t border-white/10 space-y-2">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-cyan-300/20 to-sky-500/20 border border-cyan-200/20 flex items-center justify-center text-[11px] font-bold text-cyan-200 shrink-0">
+                {(user?.email || '?').slice(0, 2).toUpperCase()}
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-[11px] font-semibold text-slate-200 truncate">{user?.email || '…'}</p>
+                <p className="text-[9px] text-slate-500 font-mono uppercase tracking-widest">
+                  {user?.role === 'admin' ? '管理员' : '用户'}
+                </p>
+              </div>
+              <button
+                onClick={async () => {
+                  await logout();
+                  window.location.reload();
+                }}
+                className="p-2 text-slate-500 hover:text-rose-300 hover:bg-white/5 rounded-lg transition-colors"
+                title="退出登录"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+              </button>
+            </div>
+            <p className="text-[10px] text-slate-600 leading-relaxed">
+              数据按账号隔离存储，模型密钥仅保存在服务端。
+            </p>
+            <button
+              onClick={() => setShowPasswordModal(true)}
+              className="w-full flex items-center gap-2 px-3 py-2 text-[10px] font-medium tracking-wider border border-white/10 text-slate-400 hover:text-cyan-100 hover:border-cyan-300/30 hover:bg-white/5 transition-colors rounded-xl"
+            >
+              <KeyRound className="w-3.5 h-3.5" />
+              修改密码
+            </button>
           </div>
         </aside>
 
-        <main className="flex-1">
+        <main className="flex-1 min-w-0">
+          {/* 桌面端主区头部 */}
+          <div className="hidden md:flex items-start justify-between gap-6 mb-8">
+            <div>
+              <h1 className="text-2xl font-semibold text-white tracking-tight">项目库</h1>
+              <p className="text-[11px] text-cyan-200/60 font-mono tracking-widest uppercase mt-1">
+                Studio Lobby
+              </p>
+            </div>
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2 text-[11px] text-slate-400">
+                <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-white/10 bg-white/[0.03]">
+                  <Folder className="w-3.5 h-3.5 text-cyan-300/70" />
+                  {projects.length} 个项目
+                </span>
+                <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-white/10 bg-white/[0.03]">
+                  <Layers className="w-3.5 h-3.5 text-violet-300/70" />
+                  {libraryItems.length} 个资产
+                </span>
+              </div>
+              <button
+                onClick={handleCreate}
+                className="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-cyan-300 to-sky-400 text-slate-950 hover:from-cyan-200 hover:to-sky-300 transition-all text-[11px] font-bold tracking-widest uppercase rounded-xl shadow-lg shadow-cyan-500/20"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                新建项目
+              </button>
+            </div>
+          </div>
+
           <div className="md:hidden mb-6 space-y-3">
             <div className="flex items-center justify-between">
               <div>
@@ -262,6 +351,28 @@ const Dashboard: React.FC<Props> = ({ onOpenProject, onShowOnboarding, onShowMod
               <Loader2 className="w-6 h-6 text-zinc-600 animate-spin" />
             </div>
           ) : (
+            <>
+            {projects.length === 0 && (
+              <div className="mb-8 rounded-[1.75rem] border border-white/10 bg-slate-950/40 backdrop-blur-xl p-8 md:p-10 flex flex-col md:flex-row items-center gap-6 text-center md:text-left animate-in fade-in duration-300">
+                <div className="w-16 h-16 rounded-2xl bg-cyan-300/10 border border-cyan-200/20 flex items-center justify-center shrink-0">
+                  <Folder className="w-7 h-7 text-cyan-300/80" />
+                </div>
+                <div className="flex-1">
+                  <h3 className="text-base font-bold text-white">还没有项目</h3>
+                  <p className="text-xs text-slate-400 mt-1.5 leading-relaxed">
+                    从故事草稿开始，一步步生成剧本、角色与场景、关键帧，再到完整视频片段。
+                    <span className="hidden md:inline"> 点击「新建项目」或下方卡片开始创作。</span>
+                  </p>
+                </div>
+                <button
+                  onClick={handleCreate}
+                  className="md:shrink-0 inline-flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-cyan-300 to-sky-400 text-slate-950 hover:from-cyan-200 hover:to-sky-300 transition-all text-[11px] font-bold tracking-widest uppercase rounded-xl shadow-lg shadow-cyan-500/20"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  开始创作
+                </button>
+              </div>
+            )}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
             
             <div 
@@ -316,19 +427,35 @@ const Dashboard: React.FC<Props> = ({ onOpenProject, onShowOnboarding, onShowMod
                     </div>
                   )}
 
-                  <div className="flex-1 p-6 relative flex flex-col">
+                  {/* 封面区：人物/场景参考图或关键帧 */}
+                  <div className="h-28 shrink-0 overflow-hidden bg-gradient-to-br from-slate-900 via-slate-900/80 to-cyan-950/40 relative">
+                    {proj.cover ? (
+                      <img
+                        src={proj.cover}
+                        alt=""
+                        className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-[1.04]"
+                        loading="lazy"
+                      />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center">
+                        <Folder className="w-8 h-8 text-cyan-300/20 group-hover:text-cyan-200/50 transition-colors" />
+                      </div>
+                    )}
+                    <div className="absolute inset-0 bg-gradient-to-t from-slate-950/70 via-transparent to-transparent" />
+                  </div>
+
+                  <div className="flex-1 p-5 relative flex flex-col min-h-0">
                      <button 
                         onClick={(e) => requestDelete(e, proj.id)}
-                        className="absolute top-4 right-4 opacity-0 group-hover:opacity-100 p-2 hover:bg-white/10 text-slate-500 hover:text-red-300 transition-all rounded-xl z-10"
+                        className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 p-1.5 bg-slate-950/60 backdrop-blur hover:bg-white/10 text-slate-400 hover:text-red-300 transition-all rounded-lg z-10"
                         title="删除项目"
                     >
-                        <Trash2 className="w-4 h-4" />
+                        <Trash2 className="w-3.5 h-3.5" />
                     </button>
 
-                     <div className="flex-1">
-                        <Folder className="w-9 h-9 text-cyan-300/25 mb-6 group-hover:text-cyan-200/70 transition-colors" />
+                     <div className="flex-1 min-h-0">
                         <h3 className="text-sm font-bold text-white mb-2 line-clamp-1 tracking-wide">{proj.title}</h3>
-                        <div className="flex flex-wrap gap-2 mb-4">
+                        <div className="flex flex-wrap gap-2 mb-3">
                             <span className="text-[9px] font-mono text-cyan-100/70 border border-cyan-200/15 bg-cyan-300/10 px-2 py-1 uppercase tracking-wider rounded-full">
                               {proj.stage === 'script' ? '剧情创作' :
                                proj.stage === 'assets' ? '场景角色' :
@@ -337,9 +464,9 @@ const Dashboard: React.FC<Props> = ({ onOpenProject, onShowOnboarding, onShowMod
                                proj.stage === 'prompts' ? '资产管理' : '未知'}
                             </span>
                         </div>
-                        {proj.scriptData?.logline && (
+                        {proj.logline && (
                             <p className="text-[10px] text-slate-400 line-clamp-2 leading-relaxed font-mono border-l border-cyan-200/20 pl-2">
-                            {proj.scriptData.logline}
+                            {proj.logline}
                             </p>
                         )}
                      </div>
@@ -355,12 +482,84 @@ const Dashboard: React.FC<Props> = ({ onOpenProject, onShowOnboarding, onShowMod
               </div>
             ))}
           </div>
+            </>
           )}
         </main>
       </div>
 
+      {showPasswordModal && (
+        <div
+          className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-xl flex items-center justify-center p-4"
+          onClick={() => !isChangingPassword && setShowPasswordModal(false)}
+        >
+          <form
+            onSubmit={handleChangePassword}
+            className="relative w-full max-w-md bg-slate-950/95 border border-cyan-200/15 rounded-[1.75rem] p-6 md:p-8 shadow-2xl shadow-cyan-950/30"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <button
+              type="button"
+              onClick={() => setShowPasswordModal(false)}
+              disabled={isChangingPassword}
+              className="absolute right-4 top-4 p-2 text-slate-500 hover:text-white hover:bg-white/10 rounded-xl disabled:opacity-40"
+              aria-label="关闭修改密码窗口"
+            >
+              <X className="w-4 h-4" />
+            </button>
+            <div className="mb-6">
+              <div className="w-10 h-10 rounded-2xl bg-cyan-300/10 border border-cyan-200/20 flex items-center justify-center mb-4">
+                <KeyRound className="w-5 h-5 text-cyan-200" />
+              </div>
+              <h2 className="text-lg font-semibold text-white">修改密码</h2>
+              <p className="text-xs text-slate-400 mt-2">修改成功后，其他设备上的登录会自动退出。</p>
+            </div>
+            <div className="space-y-4">
+              {[
+                ['current', '当前密码', 'current-password'],
+                ['next', '新密码（至少 10 个字节）', 'new-password'],
+                ['confirm', '确认新密码', 'new-password'],
+              ].map(([field, label, autoComplete]) => (
+                <label key={field} className="block text-[11px] text-slate-300">
+                  <span className="block mb-2">{label}</span>
+                  <span className="relative block">
+                    <input
+                      type={showPasswordValues ? 'text' : 'password'}
+                      autoComplete={autoComplete}
+                      value={passwordForm[field as keyof typeof passwordForm]}
+                      onChange={(event) => setPasswordForm((value) => ({ ...value, [field]: event.target.value }))}
+                      className="w-full px-4 py-3 pr-11 bg-white/5 border border-white/10 rounded-xl text-sm text-white focus:outline-none focus:border-cyan-300/50"
+                      required
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPasswordValues((visible) => !visible)}
+                      className="absolute inset-y-0 right-0 w-11 flex items-center justify-center text-slate-500 hover:text-cyan-200"
+                      aria-label={showPasswordValues ? '隐藏密码' : '显示密码'}
+                    >
+                      {showPasswordValues ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </span>
+                </label>
+              ))}
+            </div>
+            <button
+              type="submit"
+              disabled={isChangingPassword || !passwordForm.current || !passwordForm.next || !passwordForm.confirm}
+              className="mt-6 w-full flex items-center justify-center gap-2 py-3 bg-cyan-300 text-slate-950 hover:bg-cyan-200 rounded-xl text-xs font-bold transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {isChangingPassword && <Loader2 className="w-4 h-4 animate-spin" />}
+              保存新密码
+            </button>
+          </form>
+        </div>
+      )}
+
       {showLibraryModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/75 p-6 backdrop-blur-xl" onClick={() => setShowLibraryModal(false)}>
+        <div
+          className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/75 backdrop-blur-xl"
+          onClick={() => setShowLibraryModal(false)}
+        >
+          <div className="min-h-full flex items-center justify-center p-4 md:p-8">
           <div
             className="relative w-full max-w-6xl bg-slate-950/90 border border-cyan-200/15 p-6 md:p-8 rounded-[1.75rem] shadow-2xl shadow-cyan-950/30"
             onClick={(e) => e.stopPropagation()}
@@ -477,11 +676,16 @@ const Dashboard: React.FC<Props> = ({ onOpenProject, onShowOnboarding, onShowMod
               </div>
             )}
           </div>
+          </div>
         </div>
       )}
 
       {assetToUse && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/75 p-6 backdrop-blur-xl" onClick={() => setAssetToUse(null)}>
+        <div
+          className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/75 backdrop-blur-xl"
+          onClick={() => setAssetToUse(null)}
+        >
+          <div className="min-h-full flex items-center justify-center p-4 md:p-8">
           <div
             className="relative w-full max-w-2xl bg-slate-950/90 border border-cyan-200/15 p-6 md:p-8 rounded-[1.75rem] shadow-2xl shadow-cyan-950/30"
             onClick={(e) => e.stopPropagation()}
@@ -515,6 +719,7 @@ const Dashboard: React.FC<Props> = ({ onOpenProject, onShowOnboarding, onShowMod
                 </div>
               )}
             </div>
+          </div>
           </div>
         </div>
       )}

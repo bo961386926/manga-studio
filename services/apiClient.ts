@@ -3,6 +3,24 @@
  * and to allow backend logging of target URLs, payloads, and errors.
  */
 
+import { apiFetch } from './storageService';
+import type { MediaRef } from '../types/modelGateway';
+
+// Upload a Data URL into a private MediaRef via the authenticated gateway.
+// Credentials are never accepted from the browser; only the server holds keys.
+export const uploadMediaAsRef = async (dataUrl: string): Promise<MediaRef> => {
+  const res = await apiFetch('/media-assets', {
+    method: 'POST',
+    body: JSON.stringify({ dataUrl }),
+  });
+  return {
+    kind: 'media',
+    id: res.assetId,
+    contentType: res.contentType,
+    sizeBytes: Number(res.sizeBytes),
+  };
+};
+
 // Helper to convert Blob to base64 string in browser
 const blobToBase64 = (blob: Blob): Promise<string> => {
   return new Promise((resolve, reject) => {
@@ -18,64 +36,15 @@ const blobToBase64 = (blob: Blob): Promise<string> => {
   });
 };
 
-export const proxyFetch = async (targetUrl: string, options?: RequestInit): Promise<Response> => {
-  const backendUrl = '/api/ai-forward';
-  
-  let cleanUrl = targetUrl;
-  if (cleanUrl.startsWith('/api-vc')) cleanUrl = cleanUrl.replace('/api-vc', 'https://ark.cn-beijing.volces.com');
-  if (cleanUrl.startsWith('/api-ds')) cleanUrl = cleanUrl.replace('/api-ds', 'https://dashscope.aliyuncs.com/api/v1');
-  if (cleanUrl.startsWith('/api-dp')) cleanUrl = cleanUrl.replace('/api-dp', 'https://api.deepseek.com');
-  
-  if (!cleanUrl.startsWith('http')) {
-    console.warn(`[proxyFetch] targetUrl is not absolute: ${cleanUrl}`);
-  }
-
-  let bodyPayload: any = undefined;
-
-  if (options?.body) {
-    if (options.body instanceof FormData) {
-      const fields: Record<string, string> = {};
-      const files: Record<string, { name: string; type: string; data: string }> = {};
-
-      for (const [key, value] of options.body.entries()) {
-        if (value instanceof Blob) {
-          const base64Data = await blobToBase64(value);
-          files[key] = {
-            name: (value as any).name || 'file',
-            type: value.type,
-            data: base64Data
-          };
-        } else {
-          fields[key] = String(value);
-        }
-      }
-
-      bodyPayload = {
-        isFormData: true,
-        fields,
-        files
-      };
-    } else if (typeof options.body === 'string') {
-      try {
-        bodyPayload = JSON.parse(options.body);
-      } catch {
-        bodyPayload = options.body;
-      }
-    } else {
-      bodyPayload = options.body;
-    }
-  }
-
-  const payload = {
-    targetUrl: cleanUrl,
-    method: options?.method || 'GET',
-    headers: options?.headers,
-    body: bodyPayload
-  };
-
-  return fetch(backendUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  });
+/**
+ * DEPRECATED — legacy vendor adapters only.
+ *
+ * The server-side /api/ai-forward route has been REMOVED (stage-3 gate):
+ * production code no longer accepts arbitrary target URLs, upstream headers
+ * or client credentials. This function now always fails with a clear message;
+ * legacy vendor calls must migrate to gateway-managed models
+ * (services/modelGatewayClient). Gateway models never use this path.
+ */
+export const proxyFetch = async (_targetUrl: string, _options?: RequestInit): Promise<Response> => {
+  throw new Error('legacy forward proxy removed: migrate this model to the self-hosted gateway');
 };

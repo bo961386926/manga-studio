@@ -20,8 +20,10 @@ services:
       dockerfile: Dockerfile.server
     image: manga-studio-api:latest
     container_name: manga-studio-api
-    ports:
-      - "3001:3001"
+    # API 不暴露宿主公网端口：仅内部网络可达（nginx 反代），
+    # 防止未认证的 API 端口暴露到公网（stage-3 硬化）。
+    expose:
+      - "3001"
     environment:
       - DB_HOST=postgres
       - DB_PORT=5432

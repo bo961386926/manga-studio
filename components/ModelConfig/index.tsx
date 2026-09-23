@@ -20,13 +20,14 @@ import {
 import { verifyApiKey } from '../../services/modelService';
 import ModelList from './ModelList';
 import GlobalSettings from './GlobalSettings';
+import GatewayPanel from './GatewayPanel';
 
 interface ModelConfigModalProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
-type TabType = 'global' | 'chat' | 'image' | 'video';
+type TabType = 'global' | 'chat' | 'image' | 'video' | 'gateway';
 
 const ModelConfigModal: React.FC<ModelConfigModalProps> = ({ isOpen, onClose }) => {
   const [activeTab, setActiveTab] = useState<TabType>('global');
@@ -43,6 +44,7 @@ const ModelConfigModal: React.FC<ModelConfigModalProps> = ({ isOpen, onClose }) 
     { id: 'chat', label: '对话模型', icon: <MessageSquare className="w-4 h-4" /> },
     { id: 'image', label: '图片模型', icon: <Image className="w-4 h-4" /> },
     { id: 'video', label: '视频模型', icon: <Video className="w-4 h-4" /> },
+    { id: 'gateway', label: '自建网关', icon: <Sparkles className="w-4 h-4" /> },
   ];
 
   return (
@@ -113,7 +115,9 @@ const ModelConfigModal: React.FC<ModelConfigModalProps> = ({ isOpen, onClose }) 
 
         {/* 内容区域 */}
         <div className="flex-1 overflow-y-auto p-6" key={refreshKey}>
-          {activeTab === 'global' ? (
+          {activeTab === 'gateway' ? (
+            <GatewayPanel />
+          ) : activeTab === 'global' ? (
             <GlobalSettings onRefresh={refresh} />
           ) : (
             <ModelList 

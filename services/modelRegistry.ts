@@ -14,10 +14,104 @@ import {
   AspectRatio,
   VideoDuration,
 } from '../types/model';
-import { getConfig, setConfig, removeConfig } from './storageService';
+import { getConfig, setConfig, removeConfig, apiFetch } from './storageService';
 
 const STORAGE_KEY = 'manga_studio_model_registry';
 const API_KEY_STORAGE_KEY = 'antsk_api_key';
+
+// Legacy keys scanned by the browser migration wizard.
+export const LEGACY_MIGRATION_KEYS = [
+  'manga_studio_model_registry',
+  'antsk_api_key',
+  'manga_studio_model_config',
+] as const;
+
+const LOCAL_STORAGE_PREFIX = 'manga_studio_config:';
+
+const readLocalStorage = (key: string): string | null => {
+  if (typeof window === 'undefined') return null;
+  try {
+    return window.localStorage.getItem(key) ?? window.localStorage.getItem(`${LOCAL_STORAGE_PREFIX}${key}`);
+  } catch {
+    return null;
+  }
+};
+
+const removeLocalKey = (key: string): void => {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.removeItem(key);
+    window.localStorage.removeItem(`${LOCAL_STORAGE_PREFIX}${key}`);
+  } catch {
+    // ignore storage errors
+  }
+};
+
+const parseJson = (raw: string | null): any => {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return raw;
+  }
+};
+
+const maskSecret = (value: unknown): string | null => {
+  if (value === undefined || value === null || value === '') return null;
+  const s = String(value);
+  if (s.length <= 8) return '****';
+  return `${s.slice(0, 4)}****${s.slice(-4)}`;
+};
+
+export interface LegacyMigrationSummary {
+  present: boolean;
+  registry?: any;
+  apiKeyMasked?: string | null;
+  modelConfigPresent: boolean;
+  modelCount: number;
+  providerCount: number;
+}
+
+// Scan only the three documented legacy localStorage keys and build a masked
+// summary. No upload happens here; confirmation is required first.
+export const scanLegacyConfig = (): LegacyMigrationSummary => {
+  const registry = parseJson(readLocalStorage(LEGACY_MIGRATION_KEYS[0]));
+  const apiKey = parseJson(readLocalStorage(LEGACY_MIGRATION_KEYS[1]));
+  const modelConfig = parseJson(readLocalStorage(LEGACY_MIGRATION_KEYS[2]));
+  const registryPresent = registry && typeof registry === 'object' && Array.isArray(registry.models);
+  return {
+    present: Boolean(registryPresent || apiKey || modelConfig),
+    registry: registryPresent ? registry : undefined,
+    apiKeyMasked: apiKey ? maskSecret(apiKey) : null,
+    modelConfigPresent: Boolean(modelConfig),
+    modelCount: registryPresent ? registry.models.length : 0,
+    providerCount: registryPresent ? registry.providers?.length ?? 0 : 0,
+  };
+};
+
+// Upload the scanned legacy config to the server as the admin's private
+// settings. Requires an authenticated admin session; the caller must confirm.
+export const uploadLegacyConfig = async (
+  summary: LegacyMigrationSummary
+): Promise<{ modelCount: number; apiKeyMasked?: string | null }> => {
+  const payload: Record<string, unknown> = {};
+  if (summary.registry) payload.registry = summary.registry;
+  const apiKey = parseJson(readLocalStorage(LEGACY_MIGRATION_KEYS[1]));
+  if (apiKey) payload.apiKey = apiKey;
+  const modelConfig = parseJson(readLocalStorage(LEGACY_MIGRATION_KEYS[2]));
+  if (modelConfig) payload.modelConfig = modelConfig;
+  return apiFetch('/admin/migration/model-config', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+};
+
+// Delete local legacy keys only after a confirmed server success.
+export const deleteLegacyLocalConfig = (): void => {
+  for (const key of LEGACY_MIGRATION_KEYS) {
+    removeLocalKey(key);
+  }
+};
 
 const normalizeBaseUrl = (url: string): string => url.trim().replace(/\/+$/, '').toLowerCase();
 
@@ -89,11 +183,10 @@ const parseAndMergeState = (parsed: ModelRegistryState): void => {
     return { ...m, apiModel: m.id };
   });
 
-  // 清理不支持的国外模型
+  // 清理不支持的国外模型（仅按显式 ID 列表，不做关键词匹配，
+  // 避免误删用户自建的 gpt/claude/gemini 等自定义模型）
   parsed.models = parsed.models.filter(
     m => !(m.type === 'video' && deprecatedVideoModelIds.includes(m.id))
-      && !m.id.includes('gpt') && !m.id.includes('claude')
-      && !m.id.includes('gemini') && !m.id.includes('sora') && !m.id.includes('veo')
   );
 
   // 迁移激活模型

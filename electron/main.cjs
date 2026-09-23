@@ -1,7 +1,9 @@
 // Author: forsearch | Updated: 2026-04-30
-const { app, BrowserWindow, Menu } = require('electron');
+const { app, BrowserWindow, Menu, ipcMain, dialog } = require('electron');
 const path = require('path');
 const http = require('http');
+const crypto = require('crypto');
+const fs = require('fs');
 
 function getDistRoot() {
   if (process.env.NODE_ENV === 'development' || !app.isPackaged) {
@@ -25,11 +27,19 @@ function createWindow(port) {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
+      sandbox: true,
+      webSecurity: true,
+      preload: path.join(__dirname, 'preload.cjs'),
     },
     show: false,
   });
 
-  const url = `http://localhost:${port}/`;
+  // Remote HTTPS deployment: when REMOTE_APP_URL is set, load the remote Web
+  // app instead of the bundled dist (stage-3 gate). webSecurity stays on.
+  const remoteUrl = process.env.REMOTE_APP_URL;
+  const url = remoteUrl
+    ? new URL(remoteUrl).href
+    : `http://localhost:${port}/`;
   win.loadURL(url);
   win.once('ready-to-show', () => win.show());
   win.on('closed', () => { mainWindow = null; });
@@ -102,6 +112,39 @@ async function startServer() {
 
 async function main() {
   Menu.setApplicationMenu(null);
+
+  // Legacy config export: seal localStorage payload into an encrypted v1
+  // envelope and save it. The envelope module lives under server/ (ESM);
+  // argon2 resolves from server/node_modules. Packaged builds must include
+  // server/migration + argon2 (see stage-3 hardening task).
+  ipcMain.handle('legacy:export', async (_event, { data, password }) => {
+    try {
+      if (!data || typeof password !== 'string' || password.length < 8) {
+        return { ok: false, reason: '需要至少 8 位的导出密码' };
+      }
+      const { sealEnvelope } = await import('../server/migration/envelope.js');
+      const envelope = await sealEnvelope(
+        {
+          exportId: crypto.randomUUID(),
+          config: data,
+          purpose: 'legacy-model-config',
+        },
+        password
+      );
+      const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
+        title: '导出迁移包',
+        defaultPath: `manga-studio-export-${Date.now()}.json`,
+        filters: [{ name: 'JSON', extensions: ['json'] }],
+      });
+      if (canceled || !filePath) return { ok: false, reason: '已取消' };
+      await fs.promises.writeFile(filePath, JSON.stringify(envelope, null, 2));
+      return { ok: true, path: filePath };
+    } catch (err) {
+      console.error('[export] failed:', err.message);
+      return { ok: false, reason: `导出失败: ${err.message}` };
+    }
+  });
+
   const port = await startServer();
   createWindow(port);
 }

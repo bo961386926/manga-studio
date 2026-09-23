@@ -40,6 +40,8 @@ export interface ModelDefinitionBase {
   isBuiltIn: boolean;
   isEnabled: boolean;
   apiKey?: string;
+  /** 'legacy-vendor' (default) = existing adapters; 'gateway' = self-hosted gateway */
+  adapter_kind?: 'legacy-vendor' | 'gateway';
 }
 
 export interface ChatModelDefinition extends ModelDefinitionBase {
@@ -66,6 +68,8 @@ export interface ModelProvider {
   apiKey?: string;
   isBuiltIn: boolean;
   isDefault: boolean;
+  /** 'gateway' marks providers managed by the server-side model gateway */
+  adapter_kind?: 'legacy-vendor' | 'gateway';
 }
 
 export interface ActiveModels {

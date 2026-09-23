@@ -12,7 +12,8 @@ import ModelConfigModal from './components/ModelConfig';
 import ErrorBoundary from './components/ErrorBoundary';
 import { ProjectState } from './types';
 import { Save, CheckCircle, X } from 'lucide-react';
-import { saveProjectToDB } from './services/storageService';
+import { saveProjectToDB, loadProjectFromDB } from './services/storageService';
+import { refreshCsrf } from './services/authClient';
 import { setGlobalApiKey } from './services/geminiService';
 import { setLogCallback, clearLogCallback } from './services/renderLogService';
 import { initRegistry, getGlobalApiKey } from './services/modelRegistry';
@@ -207,13 +208,34 @@ function App() {
     updateProject({ stage });
   };
 
-  const handleOpenProject = (proj: ProjectState) => {
+  const handleOpenProject = async (proj: ProjectState) => {
+    // 列表接口只返回元数据（封面/标题/阶段），打开时按 id 加载完整项目。
+    try {
+      const full = await loadProjectFromDB(proj.id);
+      if (full) {
+        setProject(full);
+        return;
+      }
+    } catch (e) {
+      console.warn('[App] 加载项目失败，使用列表数据:', e);
+    }
     setProject(proj);
   };
 
   const handleExitProject = async () => {
     if (project) {
+      // 退出前先刷新 CSRF（避免长时间操作后 token 过期导致保存 403），
+      // 保存失败也不阻塞返回首页——本地数据仍在，下次打开可重载。
+      try {
+        await refreshCsrf();
+      } catch {
+        // session 可能已失效，忽略
+      }
+      try {
         await saveProjectToDB(project);
+      } catch (e) {
+        console.warn('[App] 退出前保存失败（不阻塞返回）:', e);
+      }
     }
     setProject(null);
   };

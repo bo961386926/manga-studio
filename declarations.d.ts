@@ -13,3 +13,13 @@ declare module '*.svg' {
   const value: string;
   export default value;
 }
+
+// Electron preload bridge (see electron/preload.cjs)
+interface Window {
+  mangaStudioBridge?: {
+    exportLegacy(
+      data: unknown,
+      password: string
+    ): Promise<{ ok: boolean; path?: string; reason?: string }>;
+  };
+}

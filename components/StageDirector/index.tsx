@@ -3,6 +3,8 @@ import React, { useState, useEffect } from 'react';
 import { LayoutGrid, Sparkles, Loader2, AlertCircle, Edit2, Film, Video as VideoIcon } from 'lucide-react';
 import { ProjectState, Shot, Keyframe, AspectRatio, VideoDuration } from '../../types';
 import { generateImage, generateVideo, generateActionSuggestion, optimizeKeyframePrompt, optimizeBothKeyframes, enhanceKeyframePrompt, splitShotIntoSubShots, rewritePromptForModeration } from '../../services/geminiService';
+import { generateVideoWithPolling } from '../../services/modelService';
+import { getModelById } from '../../services/modelRegistry';
 import { 
   getRefImagesForShot, 
   buildKeyframePrompt,
@@ -218,14 +220,20 @@ const StageDirector: React.FC<Props> = ({ project, updateProject, onApiKeyError 
     }));
     
     try {
-      const videoUrl = await generateVideo(
-        videoPrompt, 
-        sKf.imageUrl, 
-        eKf?.imageUrl,
-        selectedModel,
-        aspectRatio,
-        duration
-      );
+      const gatewayModel = getModelById(selectedModel)?.adapter_kind === 'gateway';
+      const videoUrl = gatewayModel
+        ? await generateVideoWithPolling(
+            { prompt: videoPrompt, aspectRatio, duration },
+            { onStatus: (s) => setIsAIGenerating(s === 'polling' || s === 'queued' || s === 'submitting') }
+          )
+        : await generateVideo(
+            videoPrompt,
+            sKf.imageUrl,
+            eKf?.imageUrl,
+            selectedModel,
+            aspectRatio,
+            duration
+          );
 
       updateShot(shot.id, (s) => ({
         ...s,

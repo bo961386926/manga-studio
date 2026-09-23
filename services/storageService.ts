@@ -31,11 +31,31 @@ const removeLocalStorageConfig = (key: string): void => {
   }
 };
 
-const apiFetch = async (path: string, options?: RequestInit): Promise<any> => {
+// Session-scoped CSRF state (raw token held only in memory, never persisted).
+let csrfToken: string | undefined;
+
+export const setCsrfToken = (t?: string): void => {
+  csrfToken = t;
+};
+
+export const getCsrfToken = (): string | undefined => csrfToken;
+
+export const apiFetch = async (path: string, options?: RequestInit): Promise<any> => {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...((options?.headers as Record<string, string>) || {}),
+  };
+  if (options?.method && options.method !== 'GET' && csrfToken) {
+    headers['X-CSRF-Token'] = csrfToken;
+  }
   const res = await fetch(`${API_BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json' },
     ...options,
+    headers,
   });
+  if (res.status === 401) {
+    // Session lost; drop the in-memory CSRF token.
+    csrfToken = undefined;
+  }
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error || `HTTP ${res.status}`);
@@ -45,7 +65,20 @@ const apiFetch = async (path: string, options?: RequestInit): Promise<any> => {
 
 // ========== Projects ==========
 
+// 完整项目必须有 shots 键（哪怕是空数组）。列表接口返回的"元数据"对象
+// （仅 id/title/stage/cover/logline）没有该键——拒绝保存，防止元数据
+// 覆盖掉数据库中的完整项目内容。
+const isFullProjectShape = (project: ProjectState): boolean =>
+  project &&
+  typeof project === 'object' &&
+  'shots' in project &&
+  'scriptData' in project &&
+  typeof project.id === 'string';
+
 export const saveProjectToDB = async (project: ProjectState): Promise<void> => {
+  if (!isFullProjectShape(project)) {
+    throw new Error('项目数据不完整，拒绝保存（列表元数据不可写回数据库）');
+  }
   await apiFetch('/projects', {
     method: 'POST',
     body: JSON.stringify({ ...project, lastModified: Date.now() }),

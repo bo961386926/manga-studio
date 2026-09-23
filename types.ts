@@ -111,6 +111,10 @@ export interface ProjectState {
   createdAt: number;
   lastModified: number;
   stage: 'script' | 'assets' | 'director' | 'export' | 'prompts';
+  /** 列表封面（人物/场景参考图或关键帧），仅服务端列表接口返回 */
+  cover?: string;
+  /** 一句话梗概，仅服务端列表接口返回 */
+  logline?: string;
   
   rawScript: string;
   targetDuration: string;
