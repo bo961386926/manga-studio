@@ -1,0 +1,6 @@
+# pnpm 11: allow postinstall build scripts for packages that need them.
+# Without this, pnpm refuses to run them and `pnpm install` fails with
+# ERR_PNPM_IGNORED_BUILDS.
+allowBuilds:
+  electron: true
+  esbuild: true

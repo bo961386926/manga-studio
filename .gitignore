@@ -81,3 +81,10 @@ public/ffmpeg/
 
 # pnpm 缓存
 .pnpm-store/
+# 数据库自动备份
+backups/
+
+# 本机恢复数据与调试脚本
+recovered-assets/
+repair.mjs
+server/extract.mjs
