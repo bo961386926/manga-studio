@@ -1,0 +1,8 @@
+# 依赖与产物：容器内自行安装，绝不带入本地二进制
+node_modules
+coverage
+test
+*.dump
+*.mp4
+.env
+.env.*

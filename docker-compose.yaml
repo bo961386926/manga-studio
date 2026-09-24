@@ -12,6 +12,11 @@ services:
       - "5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d manga_studio"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
     restart: unless-stopped
     networks:
       - manga-studio-network
@@ -53,6 +58,12 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck:
+      # nginx 启动时解析并缓存 upstream IP，必须在 api 可达后再启动 frontend
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:3001/api/health || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
     restart: unless-stopped
     networks:
       - manga-studio-network
@@ -67,6 +78,9 @@ services:
       - "3005:80"
     environment:
       - NODE_ENV=production
+    depends_on:
+      api:
+        condition: service_healthy
     restart: unless-stopped
     networks:
       - manga-studio-network

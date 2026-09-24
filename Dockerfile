@@ -4,6 +4,9 @@ WORKDIR /app
 
 COPY package*.json ./
 
+# postinstall（copy-ffmpeg-core.js）在 npm install 时即触发，scripts 必须先于依赖安装进镜像
+COPY scripts ./scripts
+
 # 镜像内只需 Vite 打包，不装 electron / electron-builder（依赖树极大，npm 会长时间停在 deprecated 警告后解析/下载，看起来像“卡住”）
 # 与 package.json 中 devDependencies 保持一致，避免镜像与本地行为漂移
 RUN npm install --omit=dev && \

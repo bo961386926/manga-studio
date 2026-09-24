@@ -1,0 +1,26 @@
+# 依赖与产物：容器内自行安装/构建，绝不带入本地二进制
+node_modules
+dist
+release
+coverage
+
+# 本地数据与大文件
+backups
+recovered-assets
+*.dump
+*.mp4
+
+# 服务端与桌面端：前端镜像不需要（server 有独立构建上下文）
+server
+electron
+
+# 开发辅助
+.git
+.github
+docs
+images
+promo
+tests
+backups
+.env
+.env.*
