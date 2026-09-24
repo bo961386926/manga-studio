@@ -12,7 +12,6 @@ function getDistRoot() {
   return path.join(process.resourcesPath, 'app.asar.unpacked', 'dist');
 }
 
-const API_PROXY_TARGET = 'http://api.gitcc.com';
 const DEFAULT_PORT = 39628;
 
 let mainWindow = null;
@@ -69,25 +68,14 @@ function findFreePort(startPort) {
 
 async function startServer() {
   const express = require('express');
-  const { createProxyMiddleware } = require('http-proxy-middleware');
 
   const distRoot = getDistRoot();
   const app = express();
 
-  app.use(
-    '/api-proxy',
-    createProxyMiddleware({
-      target: API_PROXY_TARGET,
-      changeOrigin: true,
-      pathRewrite: { '^/api-proxy': '' },
-      onError(err, req, res) {
-        console.error('Proxy error:', err.message);
-        res.writeHead(502, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Proxy error', message: err.message }));
-      },
-    })
-  );
-
+  // Static shell only. No API proxy here: all model calls go through the
+  // remote HTTPS deployment the renderer is pointed at (REMOTE_APP_URL) or
+  // fail loudly until the backend is configured. The bundled dist without a
+  // backend cannot save projects or invoke models by design (stage-3 gate).
   app.use(express.static(distRoot, { index: false }));
   app.get('*', (req, res) => {
     res.sendFile(path.join(distRoot, 'index.html'));

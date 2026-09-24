@@ -96,11 +96,8 @@ const getApiBase = (type: 'chat' | 'image' | 'video' = 'chat', modelId?: string)
 };
 
 const getDefaultApiBase = (): string => {
-  if (typeof window !== 'undefined') {
-    const o = window.location.origin;
-    const isLocal = o.startsWith('http://localhost') || o.startsWith('http://127.0.0.1') || o.startsWith('https://localhost') || o.startsWith('https://127.0.0.1');
-    if (isLocal && DEFAULT_API_BASE === 'http://api.gitcc.com') return '/api-proxy';
-  }
+  // The local /api-proxy shim is gone (stage-3 gate); legacy direct calls
+  // fail loudly via proxyFetch when no gateway model matches.
   return DEFAULT_API_BASE;
 };
 
