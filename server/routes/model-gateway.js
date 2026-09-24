@@ -12,12 +12,15 @@ import { invokeSync, createAsyncJob, findJob, pollJob, cancelJob, storeTextResul
 import {
   buildChatRequest, parseChatResponse,
   buildImageRequest, parseImageResponse,
-  buildVideoCreateRequest, parseVideoCreateResponse, parseVideoSyncResponse,
-  classifyVideoStatus, extractVideoResult, extractVideoError,
+  parseVideoCreateResponse,
+  resolveVideoAsyncPreset,
 } from '../model-gateway/presets.js';
 import { ensureMediaRef, getMediaContent, deleteMedia, toMediaRef } from '../model-gateway/media.js';
 import { fetchUpstream } from '../model-gateway/upstream.js';
 import { sealSecret, openSecret } from '../model-gateway/crypto.js';
+import { PRESETS } from '../model-gateway/presets.js';
+
+const PRESET_WHITELIST = PRESETS;
 
 export const modelGatewayRouter = Router();
 
@@ -192,7 +195,7 @@ modelGatewayRouter.post(
         throw new PolicyError('INVALID_PARAMS', 'missing required model fields', 422);
       }
       if (!['chat', 'image', 'video'].includes(capability)) throw new PolicyError('INVALID_PARAMS', 'invalid capability', 422);
-      if (!['openai-chat', 'openai-image', 'openai-video-sync', 'openai-video-async'].includes(protocolPreset)) {
+      if (!PRESET_WHITELIST.includes(protocolPreset)) {
         throw new PolicyError('INVALID_PARAMS', 'invalid protocolPreset', 422);
       }
       if (authOverrideType && !['none', 'bearer', 'api-key-header'].includes(authOverrideType)) {
@@ -390,11 +393,11 @@ export const buildUpstreamCaller = ({ model, provider, deps }) => {
     return headers;
   };
   return {
-    call: async ({ path, method = 'POST', jsonBody, parseResponse }) => {
+    call: async ({ path, method = 'POST', jsonBody, parseResponse, extraHeaders }) => {
       const res = await (deps?.fetchUpstream || fetchUpstream)({
         url: urlFor(path),
         method,
-        headers: buildHeaders(),
+        headers: { ...buildHeaders(), ...(extraHeaders || {}) },
         body: jsonBody !== undefined ? Buffer.from(JSON.stringify(jsonBody)) : undefined,
         maxBodyBytes: 50 * 1024 * 1024,
         timeoutMs: model.timeout_ms || provider.timeout_ms || 30000,
@@ -480,24 +483,40 @@ modelGatewayRouter.post(
         assertAspectRatio(params.aspectRatio);
         assertDuration(params.duration, model.protocol_config?.allowedDurations);
         assertReferenceCount([params.startAssetId, params.endAssetId].filter(Boolean), 2, 'frame refs');
+        const videoPreset = resolveVideoAsyncPreset(model.protocol_preset);
+        // Keyframe assets are stored server-side; vendors receive them as
+        // data URLs (or public URLs when the asset carries one).
+        const frameToDataUrl = async (assetId) => {
+          if (!assetId) return undefined;
+          const { buffer, contentType } = await getMediaContent(req.user.user_id, assetId);
+          return `data:${contentType};base64,${buffer.toString('base64')}`;
+        };
+        const startFrameDataUrl = await frameToDataUrl(params.startAssetId);
+        const endFrameDataUrl = await frameToDataUrl(params.endAssetId);
         const payload = { prompt: params.prompt, aspectRatio: params.aspectRatio, duration: params.duration, startAssetId: params.startAssetId, endAssetId: params.endAssetId };
-        const isAsync = model.protocol_preset === 'openai-video-async';
         const result = await createAsyncJob({
           userId: req.user.user_id, isAdmin, model, provider: model.provider,
           idempotencyKey, payload,
-          buildRequest: ({ payload: p }) => buildVideoCreateRequest({
-            apiModel: model.api_model, prompt: p.prompt, size: sizeForAspect(p.aspectRatio), duration: p.duration,
-          }),
           deps: {
-            fetchUpstream: async (callParams) => caller.call({
-              path: model.protocol_config?.createEndpoint,
-              jsonBody: callParams.buildRequest(callParams),
-              parseResponse: ({ body }) => parseVideoCreateResponse(body),
-            }),
-            parseCreateResponse: ({ body }) => parseVideoCreateResponse(body),
+            fetchUpstream: async (callParams) => {
+              const built = videoPreset.buildCreateRequest({
+                apiModel: model.api_model,
+                prompt: callParams.payload.prompt,
+                size: sizeForAspect(callParams.payload.aspectRatio),
+                aspectRatio: callParams.payload.aspectRatio,
+                duration: callParams.payload.duration,
+                startFrameDataUrl,
+                endFrameDataUrl,
+              });
+              return caller.call({
+                path: videoPreset.createPath(model.protocol_config, model),
+                jsonBody: built.jsonBody,
+                extraHeaders: built.extraHeaders,
+                parseResponse: ({ body }) => videoPreset.parseCreateResponse(body),
+              });
+            },
           },
         });
-        void isAsync;
         await audit(req, { eventType: 'model.invoke', result: 'success', metadata: { detail: operation } });
         return res.status(202).json(result);
       }
@@ -549,12 +568,65 @@ const storeSyncMedia = async ({ userId, upstreamResult, deps }) => {
 
 // ---------- jobs ----------
 
+const POLLABLE_JOB_STATUSES = new Set(['queued', 'polling']);
+
+// Poll deps for a job, built from a freshly loaded model so credentials and
+// protocol_config stay current. Testable: pass a mock transport through
+// callerDeps (buildUpstreamCaller's deps.fetchUpstream shape).
+export const buildJobPollDeps = ({ model, callerDeps } = {}) => {
+  const videoPreset = resolveVideoAsyncPreset(model.protocol_preset);
+  const caller = buildUpstreamCaller({ model, provider: model.provider, deps: callerDeps });
+  return {
+    fetchJobStatus: async ({ taskId }) => {
+      const body = await caller.call({
+        path: videoPreset.statusPath(taskId, model.protocol_config, model),
+        method: 'GET',
+        // caller.call passes the parsed JSON body as the first argument.
+        parseResponse: (parsed) => parsed,
+      });
+      const state = videoPreset.classifyStatus(body);
+      if (state === 'success') return { state, resourceId: videoPreset.extractResult(body).resourceId };
+      if (state === 'failure') return { state, error: videoPreset.extractError(body) };
+      return { state };
+    },
+    downloadJobResult: async ({ resourceId }) => {
+      const transport = callerDeps?.downloadUpstream || fetchUpstream;
+      const res = await transport({
+        url: resourceId,
+        method: 'GET',
+        maxBodyBytes: 200 * 1024 * 1024,
+        timeoutMs: 300000,
+      });
+      if (res.status < 200 || res.status >= 300) throw new Error(`download upstream ${res.status}`);
+      return { buffer: res.body, contentType: res.headers['content-type'] || 'video/mp4' };
+    },
+  };
+};
+
 modelGatewayRouter.get(
   '/jobs/:jobId',
   wrap(async (req, res) => {
     const isAdmin = req.user.role === 'admin';
-    const job = await findJob({ userId: req.user.user_id, isAdmin, jobId: req.params.jobId });
+    let job = await findJob({ userId: req.user.user_id, isAdmin, jobId: req.params.jobId });
     if (!job) return res.status(404).json({ schemaVersion: 1, error: { code: 'NOT_FOUND', message: 'job not found' } });
+    // Poll-on-read: there is no external worker yet, so each read advances one
+    // poll cycle when the job is due. Upstream GETs are idempotent; concurrent
+    // reads at worst duplicate one status call.
+    const dueForPoll =
+      POLLABLE_JOB_STATUSES.has(job.status) &&
+      job.upstream_task_id &&
+      (!job.next_poll_at || new Date(job.next_poll_at).getTime() <= Date.now());
+    if (dueForPoll) {
+      try {
+        const model = await loadModel({ userId: req.user.user_id, isAdmin, modelId: job.model_id_snapshot });
+        if (model?.provider) {
+          const deps = buildJobPollDeps({ model });
+          job = await pollJob({ userId: req.user.user_id, isAdmin, job, deps });
+        }
+      } catch (err) {
+        console.error('[model-gateway] job poll error:', err.message);
+      }
+    }
     return res.json({
       schemaVersion: 1,
       jobId: job.id,
