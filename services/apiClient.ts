@@ -9,7 +9,7 @@ import type { MediaRef } from '../types/modelGateway';
 // Upload a Data URL into a private MediaRef via the authenticated gateway.
 // Credentials are never accepted from the browser; only the server holds keys.
 export const uploadMediaAsRef = async (dataUrl: string): Promise<MediaRef> => {
-  const res = await apiFetch('/media-assets', {
+  const res = await apiFetch('/model-invocations/media-assets', {
     method: 'POST',
     body: JSON.stringify({ dataUrl }),
   });
