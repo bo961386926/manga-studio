@@ -17,7 +17,7 @@ import {
 } from '../model-gateway/presets.js';
 import { ensureMediaRef, getMediaContent, deleteMedia, toMediaRef } from '../model-gateway/media.js';
 import { fetchUpstream } from '../model-gateway/upstream.js';
-import { sealSecret } from '../model-gateway/crypto.js';
+import { sealSecret, openSecret } from '../model-gateway/crypto.js';
 
 export const modelGatewayRouter = Router();
 
@@ -129,7 +129,13 @@ modelGatewayRouter.post(
         if (provider.auth_type === 'none') {
           throw new PolicyError('INVALID_PARAMS', 'auth none does not accept a credential', 422);
         }
-        const sealed = sealSecret(secret, { ownerId: req.user.user_id, recordId: provider.id, field: 'credential' });
+        const sealed = sealSecret(secret, {
+          // Deterministic AAD owner component: private providers bind to the
+          // owner user; shared providers (ownerless) bind to the provider id.
+          ownerId: provider.owner_user_id || provider.id,
+          recordId: provider.id,
+          field: 'credential',
+        });
         const versionId = crypto.randomUUID();
         await client.query(
           `INSERT INTO model_credential_versions (id, provider_id, ciphertext, iv, tag, encryption_key_id)
@@ -279,7 +285,7 @@ const audit = (req, { eventType, result, metadata = {} }) =>
     eventType,
     result,
     requestId: req.id,
-    ipHash: hashIp(req.socket.remoteAddress),
+    ipHash: hashIp(req.ip),
     metadata: { action: eventType, ...metadata },
   });
 
@@ -297,12 +303,15 @@ const loadModel = async ({ userId, isAdmin, modelId }) => {
   return withUserContext({ userId, isAdmin }, async (client) => {
     const { rows } = await client.query(
       `SELECT m.id, m.name, m.api_model, m.capability, m.adapter_kind, m.protocol_preset,
-              m.endpoint_path, m.base_url_override, m.access_level, m.enabled, m.deleted_at,
+              m.endpoint_path, m.base_url_override, m.auth_override_type, m.access_level,
+              m.enabled, m.deleted_at,
               m.protocol_config, m.timeout_ms,
               p.id AS provider_id, p.scope AS provider_scope, p.owner_user_id AS provider_owner,
               p.base_url AS provider_base_url, p.auth_type, p.auth_header_name,
-              p.timeout_ms AS provider_timeout, p.enabled AS provider_enabled, p.deleted_at AS provider_deleted
+              p.timeout_ms AS provider_timeout, p.enabled AS provider_enabled, p.deleted_at AS provider_deleted,
+              cv.id AS credential_version_id, cv.ciphertext, cv.iv, cv.tag, cv.encryption_key_id
        FROM models m JOIN model_providers p ON p.id = m.provider_id
+       LEFT JOIN model_credential_versions cv ON cv.id = p.active_credential_version_id
        WHERE m.id = $1 AND m.deleted_at IS NULL`,
       [modelId]
     );
@@ -316,6 +325,7 @@ const loadModel = async ({ userId, isAdmin, modelId }) => {
       protocol_preset: row.protocol_preset,
       endpoint_path: row.endpoint_path,
       base_url_override: row.base_url_override,
+      auth_override_type: row.auth_override_type,
       access_level: row.access_level,
       enabled: row.enabled,
       protocol_config: row.protocol_config,
@@ -330,6 +340,17 @@ const loadModel = async ({ userId, isAdmin, modelId }) => {
         timeout_ms: row.provider_timeout,
         enabled: row.provider_enabled,
         deleted_at: row.provider_deleted,
+        credential: row.credential_version_id
+          ? {
+              versionId: row.credential_version_id,
+              ciphertext: row.ciphertext,
+              iv: row.iv,
+              tag: row.tag,
+              keyId: row.encryption_key_id,
+              // Must mirror the AAD owner used at seal time.
+              ownerId: row.provider_owner || row.provider_id,
+            }
+          : null,
       },
     };
   });
@@ -343,16 +364,37 @@ const resolveUpstreamUrl = ({ model, provider, path }) => {
 };
 
 // Server-side upstream caller for self-hosted models (no client input).
-const buildUpstreamCaller = ({ model, provider, deps }) => {
+// Credentials are decrypted server-side and injected as upstream auth headers;
+// the secret never travels to the browser nor appears in invocation records.
+export const buildUpstreamCaller = ({ model, provider, deps }) => {
   const urlFor = (path) => resolveUpstreamUrl({ model, provider, path });
-  const headers = { 'Content-Type': 'application/json' };
-  // auth injection happens in Task 7 (credential resolution); reserved now.
+  const buildHeaders = () => {
+    const headers = { 'Content-Type': 'application/json' };
+    const authType = model.auth_override_type || provider.auth_type;
+    if (!authType || authType === 'none') return headers;
+    const credential = provider.credential;
+    // No credential configured: call proceeds unauthenticated and surfaces
+    // the upstream 401 as UPSTREAM_ERROR, mirroring "configured but empty".
+    if (!credential) return headers;
+    const secret = openSecret(credential, {
+      ownerId: credential.ownerId,
+      recordId: provider.id,
+      field: 'credential',
+      keyId: credential.keyId,
+    });
+    if (authType === 'bearer') {
+      headers['Authorization'] = `Bearer ${secret}`;
+    } else {
+      headers[provider.auth_header_name] = secret;
+    }
+    return headers;
+  };
   return {
     call: async ({ path, method = 'POST', jsonBody, parseResponse }) => {
       const res = await (deps?.fetchUpstream || fetchUpstream)({
         url: urlFor(path),
         method,
-        headers,
+        headers: buildHeaders(),
         body: jsonBody !== undefined ? Buffer.from(JSON.stringify(jsonBody)) : undefined,
         maxBodyBytes: 50 * 1024 * 1024,
         timeoutMs: model.timeout_ms || provider.timeout_ms || 30000,

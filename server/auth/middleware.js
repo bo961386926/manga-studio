@@ -19,10 +19,17 @@ export const requestId = (req, res, next) => {
 
 // ---------- IP audit hashing (HMAC so values are not offline-enumerable) ----------
 
-const IP_HMAC_SALT = process.env.IP_HMAC_SALT || 'dev-ip-hmac-salt';
+const isProd = () => process.env.NODE_ENV === 'production';
+
+const ipHmacSalt = () => {
+  const raw = process.env.IP_HMAC_SALT;
+  // Fail closed: a public salt makes IP hashes offline-enumerable.
+  if (!raw && isProd()) throw new Error('IP_HMAC_SALT is required in production');
+  return raw || 'dev-ip-hmac-salt';
+};
 
 export const hashIp = (ip) =>
-  crypto.createHmac('sha256', IP_HMAC_SALT).update(String(ip || '')).digest('hex');
+  crypto.createHmac('sha256', ipHmacSalt()).update(String(ip || '')).digest('hex');
 
 // ---------- security headers ----------
 
@@ -80,7 +87,19 @@ export const corsAllowlist = (req, res, next) => {
 const buckets = new Map();
 let limiterSeq = 0;
 
-export const rateLimit = ({ windowMs, max, keyFn = (req) => req.socket.remoteAddress }) => {
+// Bound memory: adversarial clients can mint unlimited key values (per-IP,
+// per-email), so sweep expired buckets once the map grows large.
+const MAX_BUCKETS = 50000;
+const sweepExpired = (now) => {
+  if (buckets.size < MAX_BUCKETS) return;
+  for (const [key, bucket] of buckets) {
+    if (bucket.resetAt < now) buckets.delete(key);
+  }
+};
+
+// Default key is req.ip, which honours app.set('trust proxy', ...) so all
+// clients behind the single nginx hop do not collapse into one bucket.
+export const rateLimit = ({ windowMs, max, keyFn = (req) => req.ip }) => {
   // Each limiter instance needs its own bucket namespace, otherwise shared
   // IP keys let one limiter's counts overflow another's max.
   const id = ++limiterSeq;
@@ -93,6 +112,7 @@ export const rateLimit = ({ windowMs, max, keyFn = (req) => req.socket.remoteAdd
     }
     bucket.count += 1;
     buckets.set(key, bucket);
+    sweepExpired(now);
     if (bucket.count > max) {
       return res.status(429).json({ error: 'rate limited' });
     }

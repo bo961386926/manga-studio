@@ -37,10 +37,21 @@ import { startBackupScheduler } from './backup.js';
 const app = express();
 const PORT = parseInt(process.env.SERVER_PORT || '3001');
 
+// Exactly one trusted proxy hop (nginx): req.ip is the real client address,
+// so rate limits and IP audit hashes do not collapse onto the proxy IP.
+app.set('trust proxy', 1);
+
 app.use(requestId);
 app.use(securityHeaders);
 app.use(corsAllowlist);
-app.use(express.json({ limit: '200mb' }));
+// Per-route JSON body limits: small by default, larger only where payloads
+// legitimately carry base64 media. nginx client_max_body_size remains the
+// outer bound; unauthenticated endpoints now parse at most 1MB.
+app.use('/api/model-invocations/media-assets', express.json({ limit: '150mb' }));
+app.use('/api/model-invocations', express.json({ limit: '1mb' }));
+app.use('/api/projects', express.json({ limit: '100mb' }));
+app.use('/api/assets', express.json({ limit: '100mb' }));
+app.use('/api', express.json({ limit: '1mb' }));
 app.use(anonymousMutationGuard);
 
 app.use('/api/auth', authRouter);

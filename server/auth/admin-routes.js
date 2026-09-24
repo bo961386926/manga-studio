@@ -28,7 +28,7 @@ const auditAdmin = (req, { eventType, result, targetUserId = null, metadata = {}
     eventType,
     result,
     requestId: req.id,
-    ipHash: hashIp(req.socket.remoteAddress),
+    ipHash: hashIp(req.ip),
     metadata: { action: eventType, ...metadata },
   });
 

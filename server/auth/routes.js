@@ -103,7 +103,7 @@ authRouter.post(
         eventType: 'auth.register',
         result: 'success',
         requestId: req.id,
-        ipHash: hashIp(req.socket.remoteAddress),
+        ipHash: hashIp(req.ip),
         metadata: { action: 'register' },
       });
     }
@@ -136,7 +136,7 @@ authRouter.post(
       eventType: 'auth.verify_email',
       result: ok ? 'success' : 'failure',
       requestId: req.id,
-      ipHash: hashIp(req.socket.remoteAddress),
+      ipHash: hashIp(req.ip),
       metadata: { action: 'verify_email' },
     });
     if (!ok) return res.status(400).json({ error: 'invalid or expired token' });
@@ -170,12 +170,12 @@ authRouter.post(
         eventType: 'auth.login',
         result: 'failure',
         requestId: req.id,
-        ipHash: hashIp(req.socket.remoteAddress),
+        ipHash: hashIp(req.ip),
         metadata: { action: 'login' },
       });
       return res.status(401).json(GENERIC_AUTH_FAILURE);
     }
-    const ipHash = hashIp(req.socket.remoteAddress);
+    const ipHash = hashIp(req.ip);
     const userAgentSummary = String(req.headers['user-agent'] || '').slice(0, 255);
     const { token, csrf, expiresAt, sessionId } = await withTransaction(async (client) => {
       const created = await createSession(client, { userId: user.id, ipHash, userAgentSummary });
@@ -215,7 +215,7 @@ authRouter.post(
       eventType: 'auth.logout',
       result: 'success',
       requestId: req.id,
-      ipHash: hashIp(req.socket.remoteAddress),
+      ipHash: hashIp(req.ip),
       metadata: { action: 'logout' },
     });
     res.clearCookie(SESSION_COOKIE, { ...cookieOptions(), maxAge: undefined });
@@ -246,14 +246,14 @@ authRouter.post(
         eventType: 'auth.change_password',
         result: 'failure',
         requestId: req.id,
-        ipHash: hashIp(req.socket.remoteAddress),
+        ipHash: hashIp(req.ip),
         metadata: { action: 'change_password' },
       });
       return res.status(400).json({ error: 'current password is incorrect' });
     }
 
     const passwordHash = await hashPassword(newPassword);
-    const ipHash = hashIp(req.socket.remoteAddress);
+    const ipHash = hashIp(req.ip);
     const userAgentSummary = String(req.headers['user-agent'] || '').slice(0, 255);
     const replacement = await withTransaction(async (client) => {
       await client.query(
@@ -393,7 +393,7 @@ authRouter.post(
       eventType: 'auth.bootstrap_complete',
       result: ok ? 'success' : 'failure',
       requestId: req.id,
-      ipHash: hashIp(req.socket.remoteAddress),
+      ipHash: hashIp(req.ip),
       metadata: { action: 'bootstrap_complete' },
     });
     if (!ok) return res.status(400).json({ error: 'invalid or expired token' });
@@ -424,7 +424,7 @@ authRouter.post(
       eventType: 'auth.reauthenticate',
       result: 'success',
       requestId: req.id,
-      ipHash: hashIp(req.socket.remoteAddress),
+      ipHash: hashIp(req.ip),
       metadata: { action: 'reauthenticate' },
     });
     return res.json({ success: true });

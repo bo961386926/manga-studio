@@ -177,6 +177,7 @@ export const createAsyncJob = async ({ userId, isAdmin, model, provider, idempot
       if (other && other.request_hash !== hash) throw new IdempotencyConflictError();
       return other?.id ?? null;
     }
+    const credentialVersionId = provider.credential?.versionId ?? null;
     await client.query(
       `INSERT INTO model_jobs (id, invocation_id, user_id, model_snapshot, credential_version_id, status, expires_at)
        VALUES (gen_random_uuid(), $1, $2, $3::jsonb, $4, 'created', NOW() + interval '24 hours')`,
@@ -190,9 +191,9 @@ export const createAsyncJob = async ({ userId, isAdmin, model, provider, idempot
           apiModel: model.api_model,
           endpointPath: model.endpoint_path,
           baseUrl: provider.base_url,
-          credentialVersionId: null,
+          credentialVersionId,
         }),
-        null,
+        credentialVersionId,
       ]
     );
     return id;

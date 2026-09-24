@@ -12,13 +12,16 @@ const BACKOFF_BASE_MS = 60 * 1000;
 // ---------- delivery-key AEAD for action tokens ----------
 
 const DELIVERY_KEY_ID = process.env.EMAIL_DELIVERY_KEY_ID || 'v1';
-// Production must set EMAIL_DELIVERY_KEY (32-byte hex). Development uses a
-// fixed derivation so pending rows survive restarts; never use it in prod.
-const deliveryKey = () =>
-  crypto
-    .createHash('sha256')
-    .update(process.env.EMAIL_DELIVERY_KEY || 'dev-only-delivery-key-do-not-use-in-prod')
-    .digest();
+// Production must set EMAIL_DELIVERY_KEY (32-byte hex) — fail closed rather
+// than sealing action tokens under a public constant. Development uses a
+// fixed derivation so pending rows survive restarts.
+const deliveryKey = () => {
+  const raw = process.env.EMAIL_DELIVERY_KEY;
+  if (!raw && process.env.NODE_ENV === 'production') {
+    throw new Error('EMAIL_DELIVERY_KEY is required in production (32-byte hex)');
+  }
+  return crypto.createHash('sha256').update(raw || 'dev-only-delivery-key-do-not-use-in-prod').digest();
+};
 
 export const sealActionToken = ({ outboxId, userId, purpose, actionTokenId, token }) => {
   const iv = crypto.randomBytes(12);

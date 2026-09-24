@@ -39,7 +39,7 @@ migrationRouter.post(
         eventType: 'migration.import',
         result: 'failure',
         requestId: req.id,
-        ipHash: hashIp(req.socket.remoteAddress),
+        ipHash: hashIp(req.ip),
         metadata: { action: 'import', detail: err.message },
       });
       return res.status(400).json({ error: err.message });
@@ -62,7 +62,7 @@ migrationRouter.post(
         eventType: 'migration.import',
         result: 'failure',
         requestId: req.id,
-        ipHash: hashIp(req.socket.remoteAddress),
+        ipHash: hashIp(req.ip),
         metadata: { action: 'import', detail: 'replay rejected' },
       });
       return res.status(409).json({ error: 'envelope already imported' });
@@ -80,7 +80,7 @@ migrationRouter.post(
       eventType: 'migration.import',
       result: 'success',
       requestId: req.id,
-      ipHash: hashIp(req.socket.remoteAddress),
+      ipHash: hashIp(req.ip),
       metadata: { action: 'import', detail: `export=${exportId}` },
     });
     res.json({ exportId, ...report });

@@ -5,9 +5,11 @@ services:
     environment:
       POSTGRES_DB: manga_studio
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-    ports:
-      - "5432:5432"
+      # 强制从 .env 提供，杜绝默认弱口令（docker compose --env-file .env up）。
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+    # 不映射宿主机端口：数据库仅内部网络可达。
+    expose:
+      - "5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     restart: unless-stopped
@@ -25,11 +27,29 @@ services:
     expose:
       - "3001"
     environment:
+      - NODE_ENV=production
       - DB_HOST=postgres
       - DB_PORT=5432
       - DB_NAME=manga_studio
       - DB_USER=postgres
-      - DB_PASSWORD=postgres
+      - DB_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+      # 登录/注册的 CORS + 匿名变更守卫白名单：必须是浏览器实际访问的 HTTPS 源，
+      # 否则所有登录请求会被 403 拒绝。
+      - CORS_ORIGINS=${CORS_ORIGINS:?CORS_ORIGINS must be set in .env}
+      - PUBLIC_APP_URL=${PUBLIC_APP_URL:?PUBLIC_APP_URL must be set in .env}
+      # 生产必需的加密密钥（32 字节 hex）；缺失时服务端 fail-close 拒绝启动。
+      - MODEL_ENC_KEY=${MODEL_ENC_KEY:?MODEL_ENC_KEY must be set in .env}
+      - REQUEST_HMAC_KEY=${REQUEST_HMAC_KEY:?REQUEST_HMAC_KEY must be set in .env}
+      - EMAIL_DELIVERY_KEY=${EMAIL_DELIVERY_KEY:?EMAIL_DELIVERY_KEY must be set in .env}
+      - IP_HMAC_SALT=${IP_HMAC_SALT:?IP_HMAC_SALT must be set in .env}
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_SECURE=${SMTP_SECURE:-false}
+      - SMTP_REQUIRE_TLS=${SMTP_REQUIRE_TLS:-true}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      - SMTP_FROM=${SMTP_FROM:-no-reply@example.com}
+      - BOOTSTRAP_ADMIN_EMAIL=${BOOTSTRAP_ADMIN_EMAIL:-}
     depends_on:
       postgres:
         condition: service_healthy

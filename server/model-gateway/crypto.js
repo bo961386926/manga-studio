@@ -6,8 +6,22 @@ import crypto from 'node:crypto';
 
 const DEFAULT_KEY_ID = process.env.MODEL_ENC_KEY_ID || 'v1';
 
-const deploymentKey = () =>
-  crypto.createHash('sha256').update(process.env.MODEL_ENC_KEY || 'dev-only-model-enc-key').digest();
+const isProd = () => process.env.NODE_ENV === 'production';
+
+const deploymentKey = () => {
+  const raw = process.env.MODEL_ENC_KEY;
+  // Fail closed: without a deployment key every credential would be sealed
+  // under a public constant. Production refuses to boot; dev derives a fixed
+  // key so pending rows survive restarts.
+  if (!raw && isProd()) throw new Error('MODEL_ENC_KEY is required in production (32-byte hex)');
+  return crypto.createHash('sha256').update(raw || 'dev-only-model-enc-key').digest();
+};
+
+const requestHmacKey = () => {
+  const raw = process.env.REQUEST_HMAC_KEY;
+  if (!raw && isProd()) throw new Error('REQUEST_HMAC_KEY is required in production (32-byte hex)');
+  return raw || 'dev-request-hmac-key';
+};
 
 export const sealSecret = (secret, { ownerId, recordId, field, keyId = DEFAULT_KEY_ID }) => {
   const iv = crypto.randomBytes(12);
@@ -34,6 +48,6 @@ export const openSecret = (sealed, { ownerId, recordId, field, keyId }) => {
 // Request hashes use a deployment-secret HMAC (never bare SHA-256 of prompts).
 export const requestHash = (canonicalJson) =>
   crypto
-    .createHmac('sha256', process.env.REQUEST_HMAC_KEY || 'dev-request-hmac-key')
+    .createHmac('sha256', requestHmacKey())
     .update(canonicalJson)
     .digest('hex');
