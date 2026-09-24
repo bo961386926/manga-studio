@@ -1,6 +1,8 @@
 // Author: forsearch | Updated: 2026-04-30
 import { ScriptData, Shot, Character, Scene, AspectRatio, VideoDuration } from "../types";
-import { proxyFetch } from './apiClient';
+import { proxyFetch, uploadMediaAsRef } from './apiClient';
+import { invokeChat, invokeImage, invokeVideo, getJob, listModels, makeIdempotencyKey } from './modelGatewayClient';
+import type { ModelDTO } from '../types/modelGateway';
 import { addRenderLogWithTokens } from './renderLogService';
 import { throwFromVideoHttpError, formatModerationBlockedForUser } from './videoHttpErrors';
 import { resolveSoraVideoDownloadId, extractSoraDirectVideoUrl, fetchVideoUrlAsDataUrl } from './soraVideoResolve';
@@ -132,6 +134,156 @@ const getSoraVideoSize = (aspectRatio: AspectRatio): string => {
 
 const ANTSK_API_BASE = DEFAULT_API_BASE;
 
+// ==================== 服务端网关桥接 ====================
+// 模型调用优先走服务端网关（模型与凭据都在服务端，浏览器不持密钥）。
+// 网关模型来自服务端 /api/model-invocations/models（通常由迁移向导把本地
+// 配置导入生成）。未命中网关模型时回退到旧厂商直连路径——该路径已随
+// /api/ai-forward 下线而失效，会以明确错误提示用户完成迁移。
+
+let gatewayModelCache: { at: number; models: ModelDTO[] } | null = null;
+const GATEWAY_MODEL_TTL_MS = 60_000;
+
+const loadGatewayModels = async (force = false): Promise<ModelDTO[]> => {
+  if (!force && gatewayModelCache && Date.now() - gatewayModelCache.at < GATEWAY_MODEL_TTL_MS) {
+    return gatewayModelCache.models;
+  }
+  try {
+    const models = await listModels();
+    gatewayModelCache = {
+      at: Date.now(),
+      models: (models || []).filter((m: any) => m.enabled && !m.deleted_at),
+    };
+    return gatewayModelCache.models;
+  } catch (e: any) {
+    console.warn('[Gateway] 网关模型列表获取失败（未登录或网关不可用）:', e?.message);
+    return [];
+  }
+};
+
+export const invalidateGatewayModelCache = (): void => {
+  gatewayModelCache = null;
+};
+
+const resolveGatewayModel = async (
+  capability: 'chat' | 'image' | 'video',
+  modelName?: string
+): Promise<ModelDTO | null> => {
+  const models = await loadGatewayModels();
+  const ofCap = models.filter((m) => m.capability === capability);
+  if (ofCap.length === 0) return null;
+  if (modelName) {
+    const byName = ofCap.find((m) => m.name === modelName || m.apiModel === modelName);
+    if (byName) return byName;
+  }
+  // 未按名匹配时：该能力只有一个网关模型就直接使用（单模型部署的常见形态）
+  return ofCap.length === 1 ? ofCap[0] : null;
+};
+
+const fetchAssetAsDataUrl = async (assetId: string): Promise<string> => {
+  const res = await fetch(`/api/model-invocations/media-assets/${assetId}/content`);
+  if (!res.ok) throw new Error(`媒体资产下载失败: HTTP ${res.status}`);
+  const blob = await res.blob();
+  return await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result as string);
+    reader.onerror = () => reject(new Error('媒体资产转 base64 失败'));
+    reader.readAsDataURL(blob);
+  });
+};
+
+const tryGatewayChat = async (prompt: string, model: string, responseFormat?: 'json_object'): Promise<string | null> => {
+  const gm = await resolveGatewayModel('chat', model);
+  if (!gm) return null;
+  const result = await invokeChat(
+    gm.id,
+    { prompt, ...(responseFormat === 'json_object' ? { responseFormat: 'json' as const } : {}) },
+    makeIdempotencyKey('chat')
+  );
+  if (result?.kind !== 'chat') throw new Error('网关文本调用返回了非文本结果');
+  return String(result.content || '');
+};
+const tryGatewayChatStream = async (
+  prompt: string,
+  model: string,
+  onDelta?: (delta: string) => void
+): Promise<string | null> => {
+  const text = await tryGatewayChat(prompt, model);
+  if (text === null) return null;
+  // 网关整段返回：分块模拟增量回调，保持流式 UI 行为
+  const CHUNK = 64;
+  for (let i = 0; i < text.length; i += CHUNK) {
+    onDelta?.(text.slice(i, i + CHUNK));
+    await new Promise((r) => setTimeout(r, 15));
+  }
+  return text;
+};
+
+const tryGatewayImage = async (
+  gatewayModel: ModelDTO,
+  finalPrompt: string,
+  referenceImages: string[],
+  aspectRatio: AspectRatio
+): Promise<string> => {
+  const referenceAssetIds: string[] = [];
+  for (const dataUrl of referenceImages.slice(0, 4)) {
+    try {
+      const ref = await uploadMediaAsRef(dataUrl);
+      referenceAssetIds.push(ref.id);
+    } catch (e: any) {
+      console.warn('[Gateway] 参考图上传失败，跳过该参考图:', e?.message);
+    }
+  }
+  const result = await invokeImage(
+    gatewayModel.id,
+    { prompt: finalPrompt, aspectRatio, ...(referenceAssetIds.length ? { referenceAssetIds } : {}) },
+    makeIdempotencyKey('image')
+  );
+  if (result?.kind !== 'asset') throw new Error('网关图片调用未返回图片资产');
+  return await fetchAssetAsDataUrl(result.assetId);
+};
+
+const generateVideoViaGateway = async (
+  gatewayModel: ModelDTO,
+  prompt: string,
+  startImageBase64: string | undefined,
+  endImageBase64: string | undefined,
+  aspectRatio: AspectRatio,
+  duration: VideoDuration
+): Promise<string> => {
+  const frameToAsset = async (dataUrl?: string): Promise<string | undefined> => {
+    if (!dataUrl) return undefined;
+    try {
+      const ref = await uploadMediaAsRef(dataUrl);
+      return ref.id;
+    } catch (e: any) {
+      console.warn('[Gateway] 关键帧上传失败:', e?.message);
+      return undefined;
+    }
+  };
+  const startAssetId = await frameToAsset(startImageBase64);
+  const endAssetId = await frameToAsset(endImageBase64);
+  const accepted = await invokeVideo(
+    gatewayModel.id,
+    { prompt, aspectRatio, duration, ...(startAssetId ? { startAssetId } : {}), ...(endAssetId ? { endAssetId } : {}) },
+    makeIdempotencyKey('video')
+  );
+  const jobId = accepted?.jobId;
+  if (!jobId) throw new Error('网关视频任务创建失败');
+  console.log(`[Gateway] 视频任务已创建: ${jobId}`);
+  const deadline = Date.now() + 20 * 60 * 1000;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 5000));
+    const job = await getJob(jobId);
+    if (job?.status === 'succeeded' && job.resultAssetId) {
+      return await fetchAssetAsDataUrl(job.resultAssetId);
+    }
+    if (job?.status === 'failed') throw new Error(job.errorMessage || '视频生成失败');
+    if (job?.status === 'cancelled') throw new Error('视频任务已取消');
+    if (job?.status === 'expired') throw new Error('视频任务已过期');
+  }
+  throw new Error('视频生成超时 (20分钟)');
+};
+
 export const verifyApiKey = async (key: string): Promise<{ success: boolean; message: string }> => {
   try {
     const apiBase = getApiBase('chat');
@@ -236,6 +388,9 @@ const cleanJsonString = (str: string): string => {
 };
 
 const chatCompletion = async (prompt: string, model: string = 'gpt-5.1', temperature: number = 0.7, maxTokens: number = 8192, responseFormat?: 'json_object', timeout: number = 600000): Promise<string> => {
+  // 服务端网关优先：命中网关模型时调用经服务端代理（浏览器不持密钥）
+  const gatewayText = await tryGatewayChat(prompt, model, responseFormat);
+  if (gatewayText !== null) return gatewayText;
   const apiKey = checkApiKey('chat', model);
   const requestModel = resolveRequestModel('chat', model);
   const resolvedModel = resolveModel('chat', model);
@@ -318,6 +473,9 @@ const chatCompletionStream = async (
   timeout: number = 600000,
   onDelta?: (delta: string) => void
 ): Promise<string> => {
+  // 服务端网关优先：整段返回后模拟增量回调
+  const gatewayText = await tryGatewayChatStream(prompt, model, onDelta);
+  if (gatewayText !== null) return gatewayText;
   const apiKey = checkApiKey('chat', model);
   const requestModel = resolveRequestModel('chat', model);
   const resolvedModel = resolveModel('chat', model);
@@ -983,11 +1141,13 @@ export const generateImage = async (
   isVariation: boolean = false
 ): Promise<string> => {
   const startTime = Date.now();
-  
+
   // 从 modelRegistry 获取当前激活的图片模型
   const activeImageModel = getActiveModel('image');
   const imageModelId = activeImageModel?.apiModel || activeImageModel?.id || 'wanx-v1';
-  const apiKey = checkApiKey('image', activeImageModel?.id);
+  // 服务端网关优先：命中网关模型时不再要求浏览器端 API Key
+  const gatewayImageModel = await resolveGatewayModel('image', imageModelId);
+  const apiKey = gatewayImageModel ? '' : checkApiKey('image', activeImageModel?.id);
   const apiBase = getApiBase('image', activeImageModel?.id);
   const requestEndpoint = (activeImageModel?.providerId === 'volcengine' || activeImageModel?.id === 'doubao-image')
     ? '/images/generations'
@@ -1064,6 +1224,22 @@ export const generateImage = async (
     `;
       }
     }
+
+  // 服务端网关优先：调用经网关代理，参考图先上传为私有媒体资产
+  if (gatewayImageModel) {
+    console.log('[ImageGen] 使用服务端网关模型生成:', gatewayImageModel.name);
+    const gatewayDataUrl = await tryGatewayImage(gatewayImageModel, finalPrompt, referenceImages, aspectRatio);
+    await addRenderLogWithTokens({
+      type: 'keyframe',
+      resourceId: 'gateway-image',
+      resourceName: `网关图片生成（${gatewayImageModel.name}）`,
+      status: 'success',
+      model: gatewayImageModel.apiModel,
+      duration: Date.now() - startTime,
+      prompt: finalPrompt.substring(0, 200),
+    });
+    return gatewayDataUrl;
+  }
 
   // 适配不同模型的请求体格式
   let requestBody: any = {};
@@ -2083,13 +2259,21 @@ export const generateVideo = async (
 ): Promise<string> => {
   const resolvedVideoModel = resolveModel('video', model);
   const requestModel = resolveRequestModel('video', model) || model;
-  const apiKey = checkApiKey('video', model);
+  // 服务端网关优先：命中网关模型时不再要求浏览器端 API Key
+  const gatewayVideoModel = await resolveGatewayModel('video', model);
+  const apiKey = gatewayVideoModel ? '' : checkApiKey('video', model);
   const apiBase = getApiBase('video', model);
   const isAsyncMode = (resolvedVideoModel?.params as any)?.mode === 'async' || requestModel === 'sora-2';
   const isQwenMode = (resolvedVideoModel?.params as any)?.mode === 'qwen';
   const isDoubaoMode = (resolvedVideoModel?.params as any)?.mode === 'doubao';
   const isH3Mode = (resolvedVideoModel?.params as any)?.mode === 'h3';
-  
+
+  // 服务端网关：关键帧上传为私有媒体资产，创建任务后轮询至完成
+  if (gatewayVideoModel) {
+    console.log(`🎬 使用服务端网关视频模型 (${gatewayVideoModel.name})`);
+    return await generateVideoViaGateway(gatewayVideoModel, prompt, startImageBase64, endImageBase64, aspectRatio, duration);
+  }
+
   // sora-2 使用异步API模式
   if (isAsyncMode) {
     return generateVideoWithSora2(prompt, startImageBase64, apiKey, aspectRatio, duration, requestModel || 'sora-2');
