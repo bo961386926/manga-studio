@@ -68,6 +68,17 @@ services:
     networks:
       - manga-studio-network
 
+  # 本地开发用假邮件服务器：所有验证/重置邮件落在 http://localhost:8025 网页里，
+  # 生产部署删除本服务即可（生产用真实 SMTP）。
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: manga-studio-mailpit
+    ports:
+      - "8025:8025"
+    restart: unless-stopped
+    networks:
+      - manga-studio-network
+
   frontend:
     build:
       context: .
