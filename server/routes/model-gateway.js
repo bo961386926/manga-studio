@@ -18,6 +18,7 @@ import {
 import { ensureMediaRef, getMediaContent, deleteMedia, toMediaRef } from '../model-gateway/media.js';
 import { fetchUpstream } from '../model-gateway/upstream.js';
 import { sealSecret, openSecret } from '../model-gateway/crypto.js';
+import { assertDailyQuota, getBalance } from '../credits.js';
 import { PRESETS } from '../model-gateway/presets.js';
 
 const PRESET_WHITELIST = PRESETS;
@@ -429,6 +430,8 @@ modelGatewayRouter.post(
       const isAdmin = req.user.role === 'admin';
       const model = await loadModel({ userId: req.user.user_id, isAdmin, modelId });
       await assertModelAccess({ model, provider: model?.provider, userId: req.user.user_id, isAdmin });
+      // 每日配额护栏（管理员不受限）
+      if (model) await assertDailyQuota({ userId: req.user.user_id, capability: model.capability, isAdmin });
 
       const caller = buildUpstreamCaller({ model, provider: model.provider });
       const preset = model.protocol_preset;
@@ -451,7 +454,7 @@ modelGatewayRouter.post(
           deps: { fetchUpstream: caller.call },
         });
         await audit(req, { eventType: 'model.invoke', result: 'success', metadata: { detail: operation } });
-        return res.json(result);
+        return res.json({ ...result, creditsRemaining: await getBalance(req.user.user_id) });
       }
 
       if (operation === 'image' && model.capability === 'image') {
@@ -475,7 +478,7 @@ modelGatewayRouter.post(
           deps: { fetchUpstream: caller.call },
         });
         await audit(req, { eventType: 'model.invoke', result: 'success', metadata: { detail: operation } });
-        return res.json(result);
+        return res.json({ ...result, creditsRemaining: await getBalance(req.user.user_id) });
       }
 
       if (operation === 'video' && model.capability === 'video') {
@@ -518,7 +521,7 @@ modelGatewayRouter.post(
           },
         });
         await audit(req, { eventType: 'model.invoke', result: 'success', metadata: { detail: operation } });
-        return res.status(202).json(result);
+        return res.status(202).json({ ...result, creditsRemaining: await getBalance(req.user.user_id) });
       }
 
       throw new PolicyError('UNSUPPORTED_OPERATION', `unsupported operation ${operation} for ${model.capability} model`, 422);

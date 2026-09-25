@@ -9,6 +9,7 @@ import { sealSecret, openSecret, requestHash } from './crypto.js';
 import { PolicyError } from './policy.js';
 import { uploadMedia, getMediaRecord } from './media.js';
 import { createNotification } from '../notifications.js';
+import { ensureCreditAccount, deductCredits, refundCredits, creditCost } from '../credits.js';
 
 export class IdempotencyConflictError extends PolicyError {
   constructor() {
@@ -123,6 +124,7 @@ export const invokeSync = async ({ userId, isAdmin, model, provider, operation, 
     return withUserContext({ userId, isAdmin }, (client) => loadInvocationResult(client, existing));
   }
 
+  let chargedCost = 0;
   const invocationId = await withUserContext({ userId, isAdmin }, async (client) => {
     const id = await insertInvocation(client, { userId, model, operation, idempotencyKey, hash, payload });
     if (!id) {
@@ -130,6 +132,9 @@ export const invokeSync = async ({ userId, isAdmin, model, provider, operation, 
       if (other && other.request_hash !== hash) throw new IdempotencyConflictError();
       return other?.id ?? null;
     }
+    // 计量扣费：与 invocation 同事务（幂等重放不重复扣）
+    chargedCost = await creditCost(client, operation);
+    await deductCredits(client, { userId, cost: chargedCost, refId: id });
     await client.query(`UPDATE model_invocations SET status = 'submitting', updated_at = NOW() WHERE id = $1`, [id]);
     return id;
   });
@@ -139,12 +144,14 @@ export const invokeSync = async ({ userId, isAdmin, model, provider, operation, 
   try {
     upstreamResult = await deps.fetchUpstream({ provider, model, operation, payload, buildRequest, parseResponse });
   } catch (err) {
-    await withUserContext({ userId, isAdmin }, (client) =>
-      client.query(
+    await withUserContext({ userId, isAdmin }, async (client) => {
+      await client.query(
         `UPDATE model_invocations SET status = 'failed', error_code = 'UPSTREAM_ERROR', error_message = $2, updated_at = NOW() WHERE id = $1`,
         [invocationId, String(err.message).slice(0, 500)]
-      )
-    );
+      );
+      // 上游提交失败未产生消耗 → 全额退款（幂等）
+      await refundCredits(client, { userId, cost: chargedCost, refId: invocationId });
+    });
     throw err;
   }
 
@@ -179,6 +186,9 @@ export const createAsyncJob = async ({ userId, isAdmin, model, provider, idempot
       return other?.id ?? null;
     }
     const credentialVersionId = provider.credential?.versionId ?? null;
+    // 计量扣费：与 job 创建同事务；submission_uncertain 不退款（见实施方案 §5.3）
+    const cost = await creditCost(client, 'video');
+    await deductCredits(client, { userId, cost, refId: id });
     await client.query(
       `INSERT INTO model_jobs (id, invocation_id, user_id, model_snapshot, credential_version_id, status, expires_at)
        VALUES (gen_random_uuid(), $1, $2, $3::jsonb, $4, 'created', NOW() + interval '24 hours')`,

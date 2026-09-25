@@ -19,6 +19,7 @@ interface Props {
 const Dashboard: React.FC<Props> = ({ onOpenProject, onShowOnboarding, onShowModelConfig }) => {
   const { showAlert } = useAlert();
   const [user, setUser] = useState<SessionUser | null>(null);
+  const [credits, setCredits] = useState<number | null>(null);
   const [showAdminPanel, setShowAdminPanel] = useState(false);
   const [projects, setProjects] = useState<ProjectState[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -110,6 +111,10 @@ const Dashboard: React.FC<Props> = ({ onOpenProject, onShowOnboarding, onShowMod
   useEffect(() => {
     loadProjects();
     fetchMe().then((u) => setUser(u));
+    fetch('/api/credits/balance')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => setCredits(typeof d?.balance === 'number' ? d.balance : null))
+      .catch(() => undefined);
   }, []);
 
   useEffect(() => {
@@ -301,6 +306,13 @@ const Dashboard: React.FC<Props> = ({ onOpenProject, onShowOnboarding, onShowMod
             <p className="text-[10px] text-slate-600 leading-relaxed">
               数据按账号隔离存储，模型密钥仅保存在服务端。
             </p>
+            {credits !== null && (
+              <div className="mt-2 text-[11px] text-slate-400 flex items-center gap-1.5">
+                <span className="text-amber-300">◆</span>
+                积分余额
+                <span className="font-bold text-amber-300">{credits}</span>
+              </div>
+            )}
             <button
               onClick={() => setShowPasswordModal(true)}
               className="w-full flex items-center gap-2 px-3 py-2 text-[10px] font-medium tracking-wider border border-white/10 text-slate-400 hover:text-cyan-100 hover:border-cyan-300/30 hover:bg-white/5 transition-colors rounded-xl"

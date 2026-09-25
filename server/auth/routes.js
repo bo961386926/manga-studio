@@ -3,6 +3,7 @@
 // protected globally by anonymousMutationGuard (Origin/Fetch Metadata).
 import { Router } from 'express';
 import { withTransaction, pool } from '../db.js';
+import { ensureCreditAccount } from '../credits.js';
 import {
   normalizeEmail,
   validatePassword,
@@ -82,6 +83,8 @@ authRouter.post(
       );
       if (rows.length === 0) return; // already registered; never leak account existence
       createdUserId = rows[0].id;
+      // 注册赠送积分（幂等，懒创建兜底由 credits 模块负责）
+      await ensureCreditAccount(client, createdUserId);
       const { id: actionTokenId, token: actionToken } = await makeToken(client, {
         userId: createdUserId,
         purpose: 'verify_email',
