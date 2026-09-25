@@ -1,11 +1,11 @@
 // Full-screen authentication page: login / register / password reset.
 // Replaces the top-bar login banner so auth feels like a real page, with a
 // smooth enter animation and consistent dark theme.
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Clapperboard, Loader2, AlertCircle, CheckCircle2, ArrowLeft, Eye, EyeOff } from 'lucide-react';
-import { login, register, requestPasswordReset, SessionUser } from '../services/authClient';
+import { login, register, requestPasswordReset, verifyEmail, resetPassword, SessionUser } from '../services/authClient';
 
-type Mode = 'login' | 'register' | 'reset';
+type Mode = 'login' | 'register' | 'reset' | 'verify' | 'reset-token';
 
 const inputCls =
   'w-full bg-slate-900/70 border border-slate-700/80 rounded-xl px-4 py-2.5 text-sm text-slate-100 ' +
@@ -20,6 +20,37 @@ export default function AuthPage({ onAuthed }: { onAuthed: (u: SessionUser) => v
   const [msg, setMsg] = useState('');
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
+  const [actionToken, setActionToken] = useState('');
+
+  // 邮件操作链接直达：#/verify-email?token=… 自动验证；#/reset-password?token=… 进入设置新密码表单
+  useEffect(() => {
+    const hash = window.location.hash || '';
+    const parseToken = (name: string) => {
+      const m = hash.match(new RegExp(`^#/${name}\\?token=([A-Za-z0-9\\-_]+)`));
+      return m ? m[1] : '';
+    };
+    const verifyToken = parseToken('verify-email');
+    if (verifyToken) {
+      setMode('verify');
+      (async () => {
+        try {
+          await verifyEmail(verifyToken);
+          setMsg('邮箱验证成功，请登录');
+        } catch (e: any) {
+          setErr(e?.message || '验证链接无效或已过期');
+        } finally {
+          window.history.replaceState(null, '', window.location.pathname + window.location.search);
+          setMode('login');
+        }
+      })();
+      return;
+    }
+    const resetToken = parseToken('reset-password');
+    if (resetToken) {
+      setActionToken(resetToken);
+      setMode('reset-token');
+    }
+  }, []);
 
   const switchMode = (m: Mode) => {
     setMode(m);
@@ -39,11 +70,17 @@ export default function AuthPage({ onAuthed }: { onAuthed: (u: SessionUser) => v
         if (password.length < 10) throw new Error('密码至少 10 位');
         if (password !== confirm) throw new Error('两次输入的密码不一致');
         await register(email.trim(), password);
-        setMsg('注册成功！验证链接已发送到邮箱（开发环境见后端日志），验证后即可登录');
         switchMode('login');
+        setMsg('注册成功！验证链接已发送到你的邮箱，请查收并点击验证后登录');
+      } else if (mode === 'reset-token') {
+        if (password.length < 10) throw new Error('密码至少 10 位');
+        if (password !== confirm) throw new Error('两次输入的密码不一致');
+        await resetPassword(actionToken, password);
+        switchMode('login');
+        setMsg('密码已重置，请用新密码登录');
       } else {
         await requestPasswordReset(email.trim());
-        setMsg('如果该邮箱已注册，重置链接已发送（开发环境见后端日志）');
+        setMsg('如果该邮箱已注册，重置链接已发送到你的邮箱');
       }
     } catch (e: any) {
       setErr(e?.message || '操作失败，请稍后重试');
@@ -65,13 +102,22 @@ export default function AuthPage({ onAuthed }: { onAuthed: (u: SessionUser) => v
             </div>
             <h1 className="text-xl font-bold tracking-wide">漫剧工场</h1>
             <p className="text-xs text-slate-500 mt-1 font-mono tracking-widest uppercase">
-              {mode === 'login' ? '欢迎回来' : mode === 'register' ? '创建账号' : '找回密码'}
+              {mode === 'login' ? '欢迎回来'
+                : mode === 'register' ? '创建账号'
+                : mode === 'verify' ? '验证邮箱'
+                : mode === 'reset-token' ? '设置新密码'
+                : '找回密码'}
             </p>
           </div>
 
           {/* 表单 */}
           <div className="px-8 pb-8 space-y-3.5">
-            {mode !== 'reset' ? (
+            {mode === 'verify' ? (
+              <div className="flex flex-col items-center gap-3 py-6 text-sm text-slate-300">
+                <Loader2 className="w-6 h-6 animate-spin text-cyan-300" />
+                正在验证邮箱…
+              </div>
+            ) : mode !== 'reset' ? (
               <>
                 <input
                   className={inputCls}
@@ -102,7 +148,7 @@ export default function AuthPage({ onAuthed }: { onAuthed: (u: SessionUser) => v
                     {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
                 </div>
-                {mode === 'register' && (
+                {(mode === 'register' || mode === 'reset-token') && (
                   <div className="relative">
                     <input
                       className={`${inputCls} pr-11`}
@@ -125,7 +171,7 @@ export default function AuthPage({ onAuthed }: { onAuthed: (u: SessionUser) => v
                              flex items-center justify-center gap-2"
                 >
                   {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-                  {mode === 'login' ? '登录' : '注册'}
+                  {mode === 'login' ? '登录' : mode === 'reset-token' ? '设置新密码' : '注册'}
                 </button>
               </>
             ) : (

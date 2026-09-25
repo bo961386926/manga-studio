@@ -87,6 +87,7 @@ services:
     container_name: manga-studio-app
     ports:
       - "3005:80"
+      - "3006:80"
     environment:
       - NODE_ENV=production
     depends_on:

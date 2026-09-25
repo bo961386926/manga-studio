@@ -41,17 +41,35 @@ export const setCsrfToken = (t?: string): void => {
 export const getCsrfToken = (): string | undefined => csrfToken;
 
 export const apiFetch = async (path: string, options?: RequestInit): Promise<any> => {
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    ...((options?.headers as Record<string, string>) || {}),
+  const doFetch = async (): Promise<Response> => {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...((options?.headers as Record<string, string>) || {}),
+    };
+    if (options?.method && options.method !== 'GET' && csrfToken) {
+      headers['X-CSRF-Token'] = csrfToken;
+    }
+    return fetch(`${API_BASE}${path}`, {
+      ...options,
+      headers,
+    });
   };
-  if (options?.method && options.method !== 'GET' && csrfToken) {
-    headers['X-CSRF-Token'] = csrfToken;
+  let res = await doFetch();
+  // 页面刷新后内存里的 CSRF token 会丢失（会话 Cookie 仍有效）。写操作遇到
+  // CSRF 403 时自动轮换一次 token 并重试，避免用户必须手动刷新页面。
+  if (res.status === 403 && options?.method && options.method !== 'GET') {
+    const body = await res.clone().json().catch(() => ({}));
+    if (typeof body?.error === 'string' && body.error.startsWith('csrf token')) {
+      const csrfRes = await fetch(`${API_BASE}/auth/csrf`);
+      if (csrfRes.ok) {
+        const data = await csrfRes.json().catch(() => ({}));
+        if (data?.csrfToken) {
+          csrfToken = data.csrfToken;
+          res = await doFetch();
+        }
+      }
+    }
   }
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    headers,
-  });
   if (res.status === 401) {
     // Session lost; drop the in-memory CSRF token.
     csrfToken = undefined;
