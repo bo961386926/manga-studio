@@ -1,6 +1,7 @@
 // Author: forsearch | Updated: 2026-04-30
 import React, { useEffect, useState } from 'react';
-import { Plus, Trash2, Loader2, Folder, ChevronRight, Calendar, AlertTriangle, X, HelpCircle, Cpu, Archive, Search, Users, MapPin, Sun, Moon, Monitor, LogOut, Layers, KeyRound, Eye, EyeOff } from 'lucide-react';
+import { Plus, Trash2, Loader2, Folder, ChevronRight, Calendar, AlertTriangle, X, HelpCircle, Cpu, Archive, Search, Users, MapPin, Sun, Moon, Monitor, LogOut, Layers, KeyRound, Eye, EyeOff, ShieldCheck } from 'lucide-react';
+import AdminPanel from './admin/AdminPanel';
 import { ProjectState, AssetLibraryItem, Character, Scene } from '../types';
 import { getAllProjectsMetadata, createNewProjectState, deleteProjectFromDB, getAllAssetLibraryItems, deleteAssetFromLibrary, loadProjectFromDB, saveProjectToDB } from '../services/storageService';
 import { applyLibraryItemToProject } from '../services/assetLibraryService';
@@ -16,6 +17,7 @@ interface Props {
 const Dashboard: React.FC<Props> = ({ onOpenProject, onShowOnboarding, onShowModelConfig }) => {
   const { showAlert } = useAlert();
   const [user, setUser] = useState<SessionUser | null>(null);
+  const [showAdminPanel, setShowAdminPanel] = useState(false);
   const [projects, setProjects] = useState<ProjectState[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
@@ -182,6 +184,10 @@ const Dashboard: React.FC<Props> = ({ onOpenProject, onShowOnboarding, onShowMod
     return item.name.toLowerCase().includes(query);
   });
 
+  if (showAdminPanel && user?.role === 'admin') {
+    return <AdminPanel onBack={() => setShowAdminPanel(false)} />;
+  }
+
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(34,211,238,0.18),_transparent_30%),radial-gradient(circle_at_bottom_right,_rgba(217,70,239,0.16),_transparent_30%),linear-gradient(135deg,_#07111f_0%,_#120b1f_48%,_#07130f_100%)] text-slate-200 p-6 md:p-10 font-sans selection:bg-cyan-300/25">
       <div className="max-w-7xl mx-auto flex gap-8">
@@ -226,6 +232,18 @@ const Dashboard: React.FC<Props> = ({ onOpenProject, onShowOnboarding, onShowMod
                   <span className="flex items-center gap-2">
                     <Cpu className="w-3.5 h-3.5" />
                     模型配置
+                  </span>
+                </button>
+              )}
+
+              {user?.role === 'admin' && (
+                <button
+                  onClick={() => setShowAdminPanel(true)}
+                  className="w-full flex items-center justify-between px-4 py-3 text-[11px] font-medium tracking-widest uppercase border border-amber-400/25 text-amber-300/90 hover:text-amber-200 hover:border-amber-300/40 hover:bg-white/5 transition-colors rounded-2xl"
+                >
+                  <span className="flex items-center gap-2">
+                    <ShieldCheck className="w-3.5 h-3.5" />
+                    管理后台
                   </span>
                 </button>
               )}

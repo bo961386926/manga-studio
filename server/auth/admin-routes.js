@@ -132,6 +132,43 @@ adminRouter.put(
   })
 );
 
+// ---------- registration status (read-only for the admin panel) ----------
+
+adminRouter.get(
+  '/registration',
+  adminLimiter,
+  wrap(requireAdmin),
+  wrap(async (req, res) => {
+    const { isRegistrationOpen } = await import('./entitlements.js');
+    res.json({ open: await isRegistrationOpen() });
+  })
+);
+
+// ---------- ops overview (read-only counters for the admin panel) ----------
+
+adminRouter.get(
+  '/stats/overview',
+  adminLimiter,
+  wrap(requireAdmin),
+  wrap(async (req, res) => {
+    const { rows } = await pool.query(`
+      SELECT
+        (SELECT COUNT(*)::int FROM users) AS users_total,
+        (SELECT COUNT(*)::int FROM users WHERE status = 'active' AND email_verified_at IS NOT NULL) AS users_verified,
+        (SELECT COUNT(*)::int FROM users WHERE created_at > NOW() - interval '24 hours') AS users_new_24h,
+        (SELECT COUNT(*)::int FROM projects) AS projects_total,
+        (SELECT COUNT(*)::int FROM model_invocations WHERE created_at > NOW() - interval '24 hours') AS invocations_24h,
+        (SELECT COUNT(*)::int FROM model_invocations WHERE status = 'failed' AND created_at > NOW() - interval '24 hours') AS invocations_failed_24h
+    `);
+    const s = rows[0];
+    res.json({
+      ...s,
+      failure_rate_24h:
+        s.invocations_24h > 0 ? Number((s.invocations_failed_24h / s.invocations_24h).toFixed(4)) : 0,
+    });
+  })
+);
+
 // ---------- disable user (last-admin guard) ----------
 
 adminRouter.post(
