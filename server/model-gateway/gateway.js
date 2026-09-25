@@ -10,6 +10,7 @@ import { PolicyError } from './policy.js';
 import { uploadMedia, getMediaRecord } from './media.js';
 import { createNotification } from '../notifications.js';
 import { ensureCreditAccount, deductCredits, refundCredits, creditCost } from '../credits.js';
+import { rewardReferrerOnFirstSuccess } from '../activities.js';
 
 export class IdempotencyConflictError extends PolicyError {
   constructor() {
@@ -157,6 +158,8 @@ export const invokeSync = async ({ userId, isAdmin, model, provider, operation, 
 
   return withUserContext({ userId, isAdmin }, async (client) => {
     const result = await uploadResult({ client, userId, invocationId, model, upstreamResult });
+    // 被邀人首次成功调用 → 发放邀请人奖励
+    await rewardReferrerOnFirstSuccess(client, userId);
     return result;
   });
 };

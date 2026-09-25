@@ -13,6 +13,9 @@ import {
   grantVip,
   listAdminUsers,
   listAnnouncements,
+  createRedeemBatch,
+  listRedeemBatches,
+  RedeemBatchRow,
   reauthenticate,
   revokeVip,
   setRegistrationOpen,
@@ -33,7 +36,14 @@ const StatCard: React.FC<{ icon: React.ReactNode; label: string; value: React.Re
 const isReauthError = (e: any) => /reauth/i.test(String(e?.message || ''));
 
 export default function AdminPanel({ onBack }: { onBack: () => void }) {
-  const [tab, setTab] = useState<'overview' | 'users' | 'announcements'>('overview');
+  const [tab, setTab] = useState<'overview' | 'users' | 'announcements' | 'redeem'>('overview');
+  const [batches, setBatches] = useState<RedeemBatchRow[]>([]);
+  const [batchName, setBatchName] = useState('');
+  const [batchCredits, setBatchCredits] = useState('50');
+  const [batchCount, setBatchCount] = useState('10');
+  const [batchMaxPerUser, setBatchMaxPerUser] = useState('1');
+  const [batchExpiresDays, setBatchExpiresDays] = useState('');
+  const [generatedCodes, setGeneratedCodes] = useState<string[]>([]);
   const [announcements, setAnnouncements] = useState<AnnouncementRow[]>([]);
   const [annTitle, setAnnTitle] = useState('');
   const [annBody, setAnnBody] = useState('');
@@ -72,11 +82,15 @@ export default function AdminPanel({ onBack }: { onBack: () => void }) {
     setAnnouncements(await listAnnouncements());
   }, []);
 
+  const loadBatches = useCallback(async () => {
+    setBatches(await listRedeemBatches());
+  }, []);
+
   useEffect(() => {
     setLoading(true);
-    Promise.all([loadOverview().catch((e) => setErr(e.message)), loadUsers().catch((e) => setErr(e.message)), loadRegistration().catch(() => undefined), loadAnnouncements().catch(() => undefined)])
+    Promise.all([loadOverview().catch((e) => setErr(e.message)), loadUsers().catch((e) => setErr(e.message)), loadRegistration().catch(() => undefined), loadAnnouncements().catch(() => undefined), loadBatches().catch(() => undefined)])
       .finally(() => setLoading(false));
-  }, [loadOverview, loadUsers, loadRegistration, loadAnnouncements]);
+  }, [loadOverview, loadUsers, loadRegistration, loadAnnouncements, loadBatches]);
 
   // 敏感操作统一入口：遇到「需要重新认证」则弹密码框后重试同一动作。
   const runSensitive = async (action: () => Promise<void>, okMsg: string) => {
@@ -137,7 +151,7 @@ export default function AdminPanel({ onBack }: { onBack: () => void }) {
             </h1>
           </div>
           <div className="flex items-center gap-2 text-sm">
-            {(['overview', 'users', 'announcements'] as const).map((t) => (
+            {(['overview', 'users', 'announcements', 'redeem'] as const).map((t) => (
               <button
                 key={t}
                 onClick={() => setTab(t)}
@@ -145,7 +159,7 @@ export default function AdminPanel({ onBack }: { onBack: () => void }) {
                   tab === t ? 'bg-cyan-300 text-slate-950 font-bold' : 'text-slate-400 hover:text-cyan-300'
                 }`}
               >
-                {t === 'overview' ? '运营概览' : t === 'users' ? '用户管理' : '公告管理'}
+                {t === 'overview' ? '运营概览' : t === 'users' ? '用户管理' : t === 'announcements' ? '公告管理' : '兑换码'}
               </button>
             ))}
           </div>
@@ -284,6 +298,81 @@ export default function AdminPanel({ onBack }: { onBack: () => void }) {
                 </div>
               ))}
               {announcements.length === 0 && <div className="text-center text-slate-500 text-sm py-6">还没有公告</div>}
+            </div>
+          </div>
+        )}
+
+        {!loading && tab === 'redeem' && (
+          <div className="space-y-4">
+            <div className="rounded-2xl border border-white/10 bg-slate-950/70 p-4 space-y-3">
+              <div className="text-sm font-semibold text-slate-200">生成兑换码批次</div>
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+                <input className={inputCls} placeholder="批次名称" value={batchName} onChange={(e) => setBatchName(e.target.value)} />
+                <input className={inputCls} placeholder="面值(积分)" value={batchCredits} onChange={(e) => setBatchCredits(e.target.value)} />
+                <input className={inputCls} placeholder="数量(1-1000)" value={batchCount} onChange={(e) => setBatchCount(e.target.value)} />
+                <input className={inputCls} placeholder="每人限领(1-10)" value={batchMaxPerUser} onChange={(e) => setBatchMaxPerUser(e.target.value)} />
+                <input className={inputCls} placeholder="有效天数(可选)" value={batchExpiresDays} onChange={(e) => setBatchExpiresDays(e.target.value)} />
+              </div>
+              <button
+                className="px-4 py-2 rounded-xl bg-cyan-300 text-slate-950 text-xs font-bold hover:bg-cyan-200 transition-colors disabled:opacity-50"
+                disabled={!batchName.trim()}
+                onClick={() =>
+                  runSensitive(async () => {
+                    const d = await createRedeemBatch({
+                      name: batchName.trim(),
+                      credits: Number(batchCredits),
+                      count: Number(batchCount),
+                      maxPerUser: Number(batchMaxPerUser),
+                      expiresInDays: batchExpiresDays ? Number(batchExpiresDays) : null,
+                    });
+                    setGeneratedCodes(d.codes);
+                    setBatchName('');
+                    await loadBatches();
+                  }, '兑换码已生成（明文仅此一次显示，请立即复制保存）')
+                }
+              >
+                生成
+              </button>
+              {generatedCodes.length > 0 && (
+                <div className="rounded-xl border border-amber-400/30 bg-amber-400/5 p-3">
+                  <div className="text-xs text-amber-300 mb-1">⚠️ 明文兑换码（仅此一次显示，点击复制）：</div>
+                  <textarea
+                    readOnly
+                    className="w-full h-24 bg-slate-900/80 border border-slate-700 rounded-lg p-2 text-xs font-mono text-slate-200"
+                    value={generatedCodes.join('\n')}
+                    onClick={(e) => (e.target as HTMLTextAreaElement).select()}
+                  />
+                </div>
+              )}
+            </div>
+            <div className="rounded-2xl border border-white/10 overflow-hidden">
+              <table className="w-full text-sm">
+                <thead className="bg-white/[0.04] text-slate-400 text-xs">
+                  <tr>
+                    <th className="text-left px-4 py-3">批次</th>
+                    <th className="text-left px-4 py-3">面值</th>
+                    <th className="text-left px-4 py-3">码数</th>
+                    <th className="text-left px-4 py-3">已兑换</th>
+                    <th className="text-left px-4 py-3">每人限领</th>
+                    <th className="text-left px-4 py-3">到期</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {batches.map((b) => (
+                    <tr key={b.id} className="border-t border-white/5">
+                      <td className="px-4 py-3">{b.name}</td>
+                      <td className="px-4 py-3 text-amber-300">{b.credits} 分</td>
+                      <td className="px-4 py-3">{b.total_codes}</td>
+                      <td className="px-4 py-3">{b.redeemed}</td>
+                      <td className="px-4 py-3">{b.max_redemptions_per_user}</td>
+                      <td className="px-4 py-3 text-xs text-slate-400">{b.expires_at ? new Date(b.expires_at).toLocaleDateString() : '长期'}</td>
+                    </tr>
+                  ))}
+                  {batches.length === 0 && (
+                    <tr><td colSpan={6} className="px-4 py-8 text-center text-slate-500 text-sm">还没有兑换码批次</td></tr>
+                  )}
+                </tbody>
+              </table>
             </div>
           </div>
         )}

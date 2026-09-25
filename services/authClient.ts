@@ -64,11 +64,11 @@ export const changePassword = async (
   setCsrfToken(body.csrfToken);
 };
 
-export const register = async (email: string, password: string): Promise<void> => {
+export const register = async (email: string, password: string, referralCode?: string): Promise<void> => {
   const res = await fetch('/api/auth/register', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify({ email, password, ...(referralCode ? { referralCode } : {}) }),
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));

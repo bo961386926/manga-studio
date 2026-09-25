@@ -16,6 +16,7 @@ export default function AuthPage({ onAuthed }: { onAuthed: (u: SessionUser) => v
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
+  const [referralCode, setReferralCode] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [msg, setMsg] = useState('');
   const [err, setErr] = useState('');
@@ -69,7 +70,7 @@ export default function AuthPage({ onAuthed }: { onAuthed: (u: SessionUser) => v
       } else if (mode === 'register') {
         if (password.length < 10) throw new Error('密码至少 10 位');
         if (password !== confirm) throw new Error('两次输入的密码不一致');
-        await register(email.trim(), password);
+        await register(email.trim(), password, referralCode.trim() || undefined);
         switchMode('login');
         setMsg('注册成功！验证链接已发送到你的邮箱，请查收并点击验证后登录');
       } else if (mode === 'reset-token') {

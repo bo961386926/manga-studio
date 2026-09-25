@@ -4,6 +4,7 @@
 import { Router } from 'express';
 import { withTransaction, pool } from '../db.js';
 import { ensureCreditAccount } from '../credits.js';
+import { bindReferral, rewardRefereeOnVerify } from '../activities.js';
 import {
   normalizeEmail,
   validatePassword,
@@ -85,6 +86,8 @@ authRouter.post(
       createdUserId = rows[0].id;
       // 注册赠送积分（幂等，懒创建兜底由 credits 模块负责）
       await ensureCreditAccount(client, createdUserId);
+      // 邀请码绑定（无效码静默忽略，不打断注册）
+      await bindReferral(client, createdUserId, req.body?.referralCode);
       const { id: actionTokenId, token: actionToken } = await makeToken(client, {
         userId: createdUserId,
         purpose: 'verify_email',
@@ -131,6 +134,8 @@ authRouter.post(
          WHERE id = $1`,
         [consumed.user_id]
       );
+      // 被邀人验证通过 → 发放邀请奖励
+      await rewardRefereeOnVerify(client, consumed.user_id);
       return true;
     });
     await recordAudit({

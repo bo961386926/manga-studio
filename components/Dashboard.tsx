@@ -20,6 +20,7 @@ const Dashboard: React.FC<Props> = ({ onOpenProject, onShowOnboarding, onShowMod
   const { showAlert } = useAlert();
   const [user, setUser] = useState<SessionUser | null>(null);
   const [credits, setCredits] = useState<number | null>(null);
+  const [referralCode, setReferralCode] = useState<string>('');
   const [showAdminPanel, setShowAdminPanel] = useState(false);
   const [projects, setProjects] = useState<ProjectState[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -115,7 +116,54 @@ const Dashboard: React.FC<Props> = ({ onOpenProject, onShowOnboarding, onShowMod
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => setCredits(typeof d?.balance === 'number' ? d.balance : null))
       .catch(() => undefined);
+    fetch('/api/credits/referral')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => setReferralCode(d?.code || ''))
+      .catch(() => undefined);
   }, []);
+
+  const refreshCredits = () => {
+    fetch('/api/credits/balance')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => setCredits(typeof d?.balance === 'number' ? d.balance : null))
+      .catch(() => undefined);
+  };
+
+  const handleCheckIn = async () => {
+    try {
+      const res = await fetch('/api/credits/checkin', { method: 'POST' });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok) {
+        showAlert(`签到成功！连签 ${d.streak} 天，+${d.creditsAwarded} 积分`, { type: 'success' });
+        refreshCredits();
+      } else {
+        showAlert(d.error || '签到失败', { type: d.code === 'ALREADY_CHECKED_IN' ? 'info' : 'error' });
+      }
+    } catch {
+      showAlert('签到失败，请稍后重试', { type: 'error' });
+    }
+  };
+
+  const handleRedeem = async () => {
+    const code = window.prompt('输入兑换码');
+    if (!code) return;
+    try {
+      const res = await fetch('/api/credits/redeem', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok) {
+        showAlert(`兑换成功！+${d.credits} 积分`, { type: 'success' });
+        refreshCredits();
+      } else {
+        showAlert(d.error || '兑换失败', { type: 'error' });
+      }
+    } catch {
+      showAlert('兑换失败，请稍后重试', { type: 'error' });
+    }
+  };
 
   useEffect(() => {
     if (showLibraryModal) {
@@ -313,6 +361,32 @@ const Dashboard: React.FC<Props> = ({ onOpenProject, onShowOnboarding, onShowMod
                 <span className="font-bold text-amber-300">{credits}</span>
               </div>
             )}
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              <button
+                onClick={handleCheckIn}
+                className="text-[10px] px-2 py-1 rounded-lg border border-cyan-400/30 text-cyan-300 hover:bg-cyan-400/10 transition-colors"
+              >
+                每日签到
+              </button>
+              <button
+                onClick={handleRedeem}
+                className="text-[10px] px-2 py-1 rounded-lg border border-white/15 text-slate-400 hover:text-white hover:bg-white/5 transition-colors"
+              >
+                兑换码
+              </button>
+              {referralCode && (
+                <button
+                  onClick={() => {
+                    navigator.clipboard?.writeText(referralCode).catch(() => undefined);
+                    showAlert(`邀请码 ${referralCode} 已复制，好友注册时填入即可双方获得积分`, { type: 'info' });
+                  }}
+                  className="text-[10px] px-2 py-1 rounded-lg border border-violet-400/30 text-violet-300 hover:bg-violet-400/10 transition-colors"
+                  title="点击复制邀请码"
+                >
+                  邀请码 {referralCode}
+                </button>
+              )}
+            </div>
             <button
               onClick={() => setShowPasswordModal(true)}
               className="w-full flex items-center gap-2 px-3 py-2 text-[10px] font-medium tracking-wider border border-white/10 text-slate-400 hover:text-cyan-100 hover:border-cyan-300/30 hover:bg-white/5 transition-colors rounded-xl"

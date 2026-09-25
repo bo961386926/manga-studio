@@ -15,6 +15,7 @@ import {
 import { grantVip, revokeVip, countActiveAdmins, setRegistrationOpen } from './entitlements.js';
 import { recordAudit } from './audit.js';
 import { importModelConfig } from '../migration/legacy-config.js';
+import crypto from 'node:crypto';
 
 export const adminRouter = Router();
 
@@ -186,6 +187,77 @@ adminRouter.delete(
     if (rowCount === 0) return res.status(404).json({ error: 'announcement not found' });
     await auditAdmin(req, { eventType: 'admin.announcement.delete', result: 'success' });
     res.json({ success: true });
+  })
+);
+
+
+// ---------- redeem code batches (admin generate/manage) ----------
+
+const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+
+adminRouter.get(
+  '/credits/redeem-batches',
+  adminLimiter,
+  wrap(requireAdmin),
+  wrap(async (req, res) => {
+    const { rows } = await pool.query(
+      `SELECT b.id, b.name, b.credits, b.total_codes, b.max_redemptions_per_user, b.expires_at, b.created_at,
+              (SELECT COUNT(*)::int FROM redeem_codes rc WHERE rc.batch_id = b.id AND rc.redeemed_by IS NOT NULL) AS redeemed
+       FROM redeem_batches b ORDER BY b.created_at DESC LIMIT 50`
+    );
+    res.json({ batches: rows });
+  })
+);
+
+adminRouter.post(
+  '/credits/redeem-batches',
+  adminLimiter,
+  wrap(requireAdmin),
+  ...sensitive,
+  wrap(csrfProtection),
+  wrap(async (req, res) => {
+    const { name, credits, count, maxPerUser = 1, expiresInDays } = req.body || {};
+    const creditsN = Number(credits);
+    const countN = Number(count);
+    const maxN = Number(maxPerUser);
+    if (!name || !Number.isInteger(creditsN) || creditsN < 1 || creditsN > 100000) {
+      return res.status(422).json({ error: 'invalid credits' });
+    }
+    if (!Number.isInteger(countN) || countN < 1 || countN > 1000) {
+      return res.status(422).json({ error: 'invalid count (1-1000)' });
+    }
+    if (!Number.isInteger(maxN) || maxN < 1 || maxN > 10) {
+      return res.status(422).json({ error: 'invalid maxPerUser (1-10)' });
+    }
+    const expires = expiresInDays ? new Date(Date.now() + Number(expiresInDays) * 864e5) : null;
+    const codes = [];
+    const hashes = [];
+    for (let i = 0; i < countN; i++) {
+      const code =
+        'MS' +
+        Array.from(crypto.randomBytes(10))
+          .map((b) => CODE_ALPHABET[b % CODE_ALPHABET.length])
+          .join('')
+          .slice(0, 10);
+      codes.push(code);
+      hashes.push(crypto.createHash('sha256').update(code).digest());
+    }
+    const batchId = await withTransaction(async (client) => {
+      const { rows } = await client.query(
+        `INSERT INTO redeem_batches (id, name, credits, total_codes, max_redemptions_per_user, expires_at, created_by)
+         VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6) RETURNING id`,
+        [String(name).slice(0, 100), creditsN, countN, maxN, expires, req.user.user_id]
+      );
+      for (const h of hashes) {
+        await client.query(
+          'INSERT INTO redeem_codes (id, batch_id, code_hash) VALUES (gen_random_uuid(), $1, $2)',
+          [rows[0].id, h]
+        );
+      }
+      await auditAdmin(req, { eventType: 'admin.redeem_batch.create', result: 'success', metadata: { detail: `${countN} codes x ${creditsN}` } });
+      return rows[0].id;
+    });
+    res.json({ batchId, codes }); // 明文仅此一次返回
   })
 );
 

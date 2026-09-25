@@ -64,3 +64,27 @@ export const createAnnouncement = (input: {
 
 export const deleteAnnouncement = (id: string): Promise<void> =>
   apiFetch(`/admin/announcements/${id}`, { method: 'DELETE' }).then(() => undefined);
+
+// ---------- 兑换码批次 ----------
+export interface RedeemBatchRow {
+  id: string;
+  name: string;
+  credits: number;
+  total_codes: number;
+  max_redemptions_per_user: number;
+  expires_at: string | null;
+  created_at: string;
+  redeemed: number;
+}
+
+export const listRedeemBatches = (): Promise<RedeemBatchRow[]> =>
+  apiFetch('/admin/credits/redeem-batches').then((r: any) => r.batches);
+
+export const createRedeemBatch = (input: {
+  name: string;
+  credits: number;
+  count: number;
+  maxPerUser?: number;
+  expiresInDays?: number | null;
+}): Promise<{ batchId: string; codes: string[] }> =>
+  apiFetch('/admin/credits/redeem-batches', { method: 'POST', body: JSON.stringify(input) });
