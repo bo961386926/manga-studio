@@ -31,7 +31,10 @@ import { authRouter } from './auth/routes.js';
 import { adminRouter } from './auth/admin-routes.js';
 import { migrationRouter } from './routes/migration.js';
 import { modelGatewayRouter } from './routes/model-gateway.js';
+import { pool } from './db.js';
 import { startOutboxWorker } from './auth/outbox.js';
+import { startNotificationScheduler } from './notifications.js';
+import { notificationsRouter } from './routes/notifications.js';
 import { startBackupScheduler } from './backup.js';
 
 const app = express();
@@ -58,6 +61,22 @@ app.use('/api/auth', authRouter);
 app.use('/api/admin', adminRouter);
 app.use('/api/migration', migrationRouter);
 app.use('/api/model-invocations', modelGatewayRouter);
+app.use('/api/notifications', notificationsRouter);
+
+// 公告：生效中的公告对所有人可见（未开始的/已结束的不展示）
+app.get('/api/announcements/active', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT title, body, level, starts_at, ends_at FROM announcements
+       WHERE starts_at <= NOW() AND (ends_at IS NULL OR ends_at > NOW())
+       ORDER BY (level = 'critical') DESC, created_at DESC LIMIT 5`
+    );
+    res.json({ announcements: rows });
+  } catch (e) {
+    console.error('[API] announcements error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
 
 // ==================== Projects (user-scoped) ====================
 
@@ -252,6 +271,7 @@ export const startServer = () => {
     .then(() => {
       startOutboxWorker();
       startBackupScheduler();
+      startNotificationScheduler();
       app.listen(PORT, () => {
         console.log(`[Server] API server running on http://localhost:${PORT}`);
       });

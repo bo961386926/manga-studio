@@ -10,6 +10,7 @@ import {
   adminLimiter,
   hashIp,
   wrap,
+  csrfProtection,
 } from './middleware.js';
 import { grantVip, revokeVip, countActiveAdmins, setRegistrationOpen } from './entitlements.js';
 import { recordAudit } from './audit.js';
@@ -129,6 +130,62 @@ adminRouter.put(
       metadata: { detail: open ? 'open' : 'closed' },
     });
     res.json({ success: true, open });
+  })
+);
+
+
+// ---------- announcements (admin publish/manage) ----------
+
+const ANNOUNCEMENT_LEVELS = new Set(['info', 'warning', 'critical']);
+
+adminRouter.get(
+  '/announcements',
+  adminLimiter,
+  wrap(requireAdmin),
+  wrap(async (req, res) => {
+    const { rows } = await pool.query(
+      'SELECT id, title, body, level, starts_at, ends_at, created_at FROM announcements ORDER BY created_at DESC LIMIT 100'
+    );
+    res.json({ announcements: rows });
+  })
+);
+
+adminRouter.post(
+  '/announcements',
+  adminLimiter,
+  wrap(requireAdmin),
+  ...sensitive,
+  wrap(csrfProtection),
+  wrap(async (req, res) => {
+    const { title, body, level = 'info', startsAt, endsAt } = req.body || {};
+    if (!title || !body) return res.status(422).json({ error: 'title and body are required' });
+    if (!ANNOUNCEMENT_LEVELS.has(level)) return res.status(422).json({ error: 'invalid level' });
+    const starts = startsAt ? new Date(startsAt) : new Date();
+    const ends = endsAt ? new Date(endsAt) : null;
+    if (Number.isNaN(starts.getTime()) || (ends && Number.isNaN(ends.getTime()))) {
+      return res.status(422).json({ error: 'invalid date' });
+    }
+    const { rows } = await pool.query(
+      `INSERT INTO announcements (id, title, body, level, starts_at, ends_at, created_by)
+       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6) RETURNING id`,
+      [String(title).slice(0, 200), body, level, starts, ends, req.user.user_id]
+    );
+    await auditAdmin(req, { eventType: 'admin.announcement.create', result: 'success', metadata: { detail: level } });
+    res.json({ id: rows[0].id });
+  })
+);
+
+adminRouter.delete(
+  '/announcements/:id',
+  adminLimiter,
+  wrap(requireAdmin),
+  ...sensitive,
+  wrap(csrfProtection),
+  wrap(async (req, res) => {
+    const { rowCount } = await pool.query('DELETE FROM announcements WHERE id = $1', [req.params.id]);
+    if (rowCount === 0) return res.status(404).json({ error: 'announcement not found' });
+    await auditAdmin(req, { eventType: 'admin.announcement.delete', result: 'success' });
+    res.json({ success: true });
   })
 );
 

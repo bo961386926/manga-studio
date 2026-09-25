@@ -36,3 +36,31 @@ export const disableUser = (userId: string): Promise<void> =>
 
 export const reauthenticate = (password: string): Promise<void> =>
   apiFetch('/auth/reauthenticate', { method: 'POST', body: JSON.stringify({ password }) }).then(() => undefined);
+
+// ---------- 公告 ----------
+export interface AnnouncementRow {
+  id: string;
+  title: string;
+  body: string;
+  level: 'info' | 'warning' | 'critical';
+  starts_at: string;
+  ends_at: string | null;
+  created_at: string;
+}
+
+export const listAnnouncements = (): Promise<AnnouncementRow[]> =>
+  apiFetch('/admin/announcements').then((r: any) => r.announcements);
+
+export const createAnnouncement = (input: {
+  title: string;
+  body: string;
+  level: 'info' | 'warning' | 'critical';
+  endsAt?: string | null;
+}): Promise<{ id: string }> =>
+  apiFetch('/admin/announcements', {
+    method: 'POST',
+    body: JSON.stringify({ ...input, endsAt: input.endsAt || null }),
+  });
+
+export const deleteAnnouncement = (id: string): Promise<void> =>
+  apiFetch(`/admin/announcements/${id}`, { method: 'DELETE' }).then(() => undefined);

@@ -3,12 +3,16 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { ArrowLeft, Loader2, Search, ShieldCheck, Users, Activity, FolderOpen, AlertCircle } from 'lucide-react';
 import {
+  AnnouncementRow,
   AdminUserRow,
+  createAnnouncement,
+  deleteAnnouncement,
   disableUser,
   getRegistrationOpen,
   getStatsOverview,
   grantVip,
   listAdminUsers,
+  listAnnouncements,
   reauthenticate,
   revokeVip,
   setRegistrationOpen,
@@ -29,7 +33,12 @@ const StatCard: React.FC<{ icon: React.ReactNode; label: string; value: React.Re
 const isReauthError = (e: any) => /reauth/i.test(String(e?.message || ''));
 
 export default function AdminPanel({ onBack }: { onBack: () => void }) {
-  const [tab, setTab] = useState<'overview' | 'users'>('overview');
+  const [tab, setTab] = useState<'overview' | 'users' | 'announcements'>('overview');
+  const [announcements, setAnnouncements] = useState<AnnouncementRow[]>([]);
+  const [annTitle, setAnnTitle] = useState('');
+  const [annBody, setAnnBody] = useState('');
+  const [annLevel, setAnnLevel] = useState<'info' | 'warning' | 'critical'>('info');
+  const [annEndsAt, setAnnEndsAt] = useState('');
   const [stats, setStats] = useState<Record<string, number> | null>(null);
   const [users, setUsers] = useState<AdminUserRow[]>([]);
   const [query, setQuery] = useState('');
@@ -59,11 +68,15 @@ export default function AdminPanel({ onBack }: { onBack: () => void }) {
     setRegOpen(await getRegistrationOpen());
   }, []);
 
+  const loadAnnouncements = useCallback(async () => {
+    setAnnouncements(await listAnnouncements());
+  }, []);
+
   useEffect(() => {
     setLoading(true);
-    Promise.all([loadOverview().catch((e) => setErr(e.message)), loadUsers().catch((e) => setErr(e.message)), loadRegistration().catch(() => undefined)])
+    Promise.all([loadOverview().catch((e) => setErr(e.message)), loadUsers().catch((e) => setErr(e.message)), loadRegistration().catch(() => undefined), loadAnnouncements().catch(() => undefined)])
       .finally(() => setLoading(false));
-  }, [loadOverview, loadUsers, loadRegistration]);
+  }, [loadOverview, loadUsers, loadRegistration, loadAnnouncements]);
 
   // 敏感操作统一入口：遇到「需要重新认证」则弹密码框后重试同一动作。
   const runSensitive = async (action: () => Promise<void>, okMsg: string) => {
@@ -71,7 +84,7 @@ export default function AdminPanel({ onBack }: { onBack: () => void }) {
     try {
       await action();
       flash(okMsg);
-      await Promise.all([loadUsers(query).catch(() => undefined), loadOverview().catch(() => undefined)]);
+      await Promise.all([loadUsers(query).catch(() => undefined), loadOverview().catch(() => undefined), loadAnnouncements().catch(() => undefined)]);
     } catch (e: any) {
       if (isReauthError(e)) {
         setPendingAction(() => action);
@@ -124,7 +137,7 @@ export default function AdminPanel({ onBack }: { onBack: () => void }) {
             </h1>
           </div>
           <div className="flex items-center gap-2 text-sm">
-            {(['overview', 'users'] as const).map((t) => (
+            {(['overview', 'users', 'announcements'] as const).map((t) => (
               <button
                 key={t}
                 onClick={() => setTab(t)}
@@ -132,7 +145,7 @@ export default function AdminPanel({ onBack }: { onBack: () => void }) {
                   tab === t ? 'bg-cyan-300 text-slate-950 font-bold' : 'text-slate-400 hover:text-cyan-300'
                 }`}
               >
-                {t === 'overview' ? '运营概览' : '用户管理'}
+                {t === 'overview' ? '运营概览' : t === 'users' ? '用户管理' : '公告管理'}
               </button>
             ))}
           </div>
@@ -183,6 +196,94 @@ export default function AdminPanel({ onBack }: { onBack: () => void }) {
               >
                 {regOpen ? '开放中' : '已关闭'}
               </button>
+            </div>
+          </div>
+        )}
+
+        {!loading && tab === 'announcements' && (
+          <div className="space-y-4">
+            <div className="rounded-2xl border border-white/10 bg-slate-950/70 p-4 space-y-3">
+              <div className="text-sm font-semibold text-slate-200">发布公告</div>
+              <input className={inputCls} placeholder="标题（必填，最多 200 字）" value={annTitle} onChange={(e) => setAnnTitle(e.target.value)} maxLength={200} />
+              <textarea className={`${inputCls} min-h-[80px]`} placeholder="正文（必填）" value={annBody} onChange={(e) => setAnnBody(e.target.value)} />
+              <div className="flex flex-wrap items-center gap-3 text-xs text-slate-400">
+                <div className="flex gap-1">
+                  {(['info', 'warning', 'critical'] as const).map((lv) => (
+                    <button
+                      key={lv}
+                      onClick={() => setAnnLevel(lv)}
+                      className={`px-3 py-1.5 rounded-lg border transition-colors ${
+                        annLevel === lv
+                          ? 'border-cyan-300/60 bg-cyan-300/10 text-cyan-200'
+                          : 'border-white/10 text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      {lv === 'info' ? 'ℹ️ 信息' : lv === 'warning' ? '⚠️ 警告' : '🚨 严重'}
+                    </button>
+                  ))}
+                </div>
+                <label className="flex items-center gap-2">
+                  结束时间（可选）:
+                  <input type="datetime-local" className="bg-slate-900/70 border border-slate-700/80 rounded-lg px-2 py-1" value={annEndsAt} onChange={(e) => setAnnEndsAt(e.target.value)} />
+                </label>
+                <button
+                  className="px-4 py-2 rounded-xl bg-cyan-300 text-slate-950 text-xs font-bold hover:bg-cyan-200 transition-colors disabled:opacity-50 ml-auto"
+                  disabled={!annTitle.trim() || !annBody.trim()}
+                  onClick={() =>
+                    runSensitive(async () => {
+                      await createAnnouncement({
+                        title: annTitle.trim(),
+                        body: annBody.trim(),
+                        level: annLevel,
+                        endsAt: annEndsAt ? new Date(annEndsAt).toISOString() : null,
+                      });
+                      setAnnTitle('');
+                      setAnnBody('');
+                      setAnnLevel('info');
+                      setAnnEndsAt('');
+                      await loadAnnouncements();
+                    }, '公告已发布')
+                  }
+                >
+                  发布
+                </button>
+              </div>
+            </div>
+            <div className="space-y-2">
+              {announcements.map((a) => (
+                <div key={a.id} className="rounded-2xl border border-white/10 bg-slate-950/70 p-4 flex items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className={`text-xs px-2 py-0.5 rounded-full border ${
+                        a.level === 'critical'
+                          ? 'text-rose-300 border-rose-400/30 bg-rose-400/10'
+                          : a.level === 'warning'
+                          ? 'text-amber-300 border-amber-400/30 bg-amber-400/10'
+                          : 'text-cyan-300 border-cyan-400/30 bg-cyan-400/10'
+                      }`}>
+                        {a.level}
+                      </span>
+                      <span className="text-sm font-semibold text-slate-100 truncate">{a.title}</span>
+                    </div>
+                    <p className="text-xs text-slate-400 mt-1 whitespace-pre-wrap break-all">{a.body}</p>
+                    <div className="text-[11px] text-slate-600 mt-1">
+                      {new Date(a.created_at).toLocaleString()}
+                      {a.ends_at ? ` · 至 ${new Date(a.ends_at).toLocaleString()}` : ' · 长期有效'}
+                    </div>
+                  </div>
+                  <button
+                    className="text-xs px-2.5 py-1 rounded-lg border border-rose-400/30 text-rose-300 hover:bg-rose-400/10 transition-colors shrink-0"
+                    onClick={() => {
+                      if (window.confirm('确认删除该公告？')) {
+                        runSensitive(() => deleteAnnouncement(a.id), '公告已删除');
+                      }
+                    }}
+                  >
+                    删除
+                  </button>
+                </div>
+              ))}
+              {announcements.length === 0 && <div className="text-center text-slate-500 text-sm py-6">还没有公告</div>}
             </div>
           </div>
         )}

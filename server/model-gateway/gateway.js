@@ -8,6 +8,7 @@ import { withUserContext } from '../db.js';
 import { sealSecret, openSecret, requestHash } from './crypto.js';
 import { PolicyError } from './policy.js';
 import { uploadMedia, getMediaRecord } from './media.js';
+import { createNotification } from '../notifications.js';
 
 export class IdempotencyConflictError extends PolicyError {
   constructor() {
@@ -299,6 +300,7 @@ export const pollJob = async ({ userId, isAdmin, job, deps }) => {
         [job.id, String(upstream.error || 'upstream failed').slice(0, 500)]
       );
       await client.query(`UPDATE model_invocations SET status = 'failed', updated_at = NOW() WHERE id = $1`, [job.invocation_id]);
+      await createNotification(client, { userId: job.user_id, kind: 'job_failed', payload: { jobId: job.id } });
       return { ...job, status: 'failed' };
     });
   }
@@ -324,6 +326,7 @@ export const pollJob = async ({ userId, isAdmin, job, deps }) => {
         [job.invocation_id, record.id]
       );
       await client.query('UPDATE media_assets SET ref_count = ref_count + 1 WHERE id = $1', [record.id]);
+      await createNotification(client, { userId: job.user_id, kind: 'job_done', payload: { jobId: job.id } });
       return { ...job, status: 'succeeded' };
     });
   } catch (err) {

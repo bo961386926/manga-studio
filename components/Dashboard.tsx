@@ -2,6 +2,8 @@
 import React, { useEffect, useState } from 'react';
 import { Plus, Trash2, Loader2, Folder, ChevronRight, Calendar, AlertTriangle, X, HelpCircle, Cpu, Archive, Search, Users, MapPin, Sun, Moon, Monitor, LogOut, Layers, KeyRound, Eye, EyeOff, ShieldCheck } from 'lucide-react';
 import AdminPanel from './admin/AdminPanel';
+import AnnouncementBanner from './AnnouncementBanner';
+import NotificationBell from './NotificationBell';
 import { ProjectState, AssetLibraryItem, Character, Scene } from '../types';
 import { getAllProjectsMetadata, createNewProjectState, deleteProjectFromDB, getAllAssetLibraryItems, deleteAssetFromLibrary, loadProjectFromDB, saveProjectToDB } from '../services/storageService';
 import { applyLibraryItemToProject } from '../services/assetLibraryService';
@@ -248,6 +250,8 @@ const Dashboard: React.FC<Props> = ({ onOpenProject, onShowOnboarding, onShowMod
                 </button>
               )}
 
+              <NotificationBell />
+
               {onShowOnboarding && (
                 <button
                   onClick={onShowOnboarding}
@@ -309,6 +313,7 @@ const Dashboard: React.FC<Props> = ({ onOpenProject, onShowOnboarding, onShowMod
 
         <main className="flex-1 min-w-0">
           {/* 桌面端主区头部 */}
+          <AnnouncementBanner />
           <div className="hidden md:flex items-start justify-between gap-6 mb-8">
             <div>
               <h1 className="text-2xl font-semibold text-white tracking-tight">项目库</h1>
