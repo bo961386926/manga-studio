@@ -113,7 +113,7 @@ const AddModelForm: React.FC<AddModelFormProps> = ({ type, onSave, onCancel }) =
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="如：GPT-4 Turbo"
+            placeholder="如：通义千问 Max"
             className="w-full bg-white/[0.06] border border-white/10 rounded-xl px-3 py-2 text-xs text-white placeholder:text-slate-500"
           />
         </div>
@@ -125,7 +125,7 @@ const AddModelForm: React.FC<AddModelFormProps> = ({ type, onSave, onCancel }) =
           type="text"
           value={apiModel}
           onChange={(e) => setApiModel(e.target.value)}
-          placeholder="如：gpt-4-turbo、claude-3-opus"
+          placeholder="示例：qwen-max / deepseek-chat"
           className="w-full bg-white/[0.06] border border-white/10 rounded-xl px-3 py-2 text-xs text-white placeholder:text-slate-500 font-mono"
         />
         <p className="text-[9px] text-zinc-600 mt-1">

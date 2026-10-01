@@ -14,16 +14,13 @@ import { ProjectState } from './types';
 import { Save, CheckCircle, X } from 'lucide-react';
 import { saveProjectToDB, loadProjectFromDB } from './services/storageService';
 import { refreshCsrf } from './services/authClient';
-import { setGlobalApiKey } from './services/geminiService';
 import { setLogCallback, clearLogCallback } from './services/renderLogService';
-import { initRegistry, getGlobalApiKey } from './services/modelRegistry';
+import { initRegistry } from './services/modelRegistry';
 
 function App() {
   const [project, setProject] = useState<ProjectState | null>(null);
-  const [apiKey, setApiKey] = useState<string>('');
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'unsaved'>('saved');
   const [showSaveStatus, setShowSaveStatus] = useState(false);
-  const [showQrCode, setShowQrCode] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [showModelConfig, setShowModelConfig] = useState(false);
@@ -44,15 +41,8 @@ function App() {
   }, []);
 
   useEffect(() => {
-    // 从数据库初始化模型配置
-    initRegistry().then(() => {
-      // API Key 由 initRegistry 加载到 modelRegistry 后读取
-      const storedKey = getGlobalApiKey();
-      if (storedKey) {
-        setApiKey(storedKey);
-        setGlobalApiKey(storedKey);
-      }
-    });
+    // 从数据库初始化模型配置（模型与凭据在服务端网关管理，浏览器不持密钥）
+    initRegistry();
     if (shouldShowOnboarding()) {
       setShowOnboarding(true);
     }
@@ -62,23 +52,13 @@ function App() {
     setShowOnboarding(false);
   };
 
-  const handleOnboardingQuickStart = (_option: 'script' | 'example') => {
+  const handleOnboardingQuickStart = () => {
     setShowOnboarding(false);
   };
 
   const handleShowOnboarding = () => {
     resetOnboarding();
     setShowOnboarding(true);
-  };
-
-  const handleSaveApiKey = (key: string) => {
-    if (key) {
-      setApiKey(key);
-      setGlobalApiKey(key);
-    } else {
-      setApiKey('');
-      setGlobalApiKey('');
-    }
   };
 
   const handleShowModelConfig = () => {
@@ -294,8 +274,6 @@ function App() {
            <Onboarding 
              onComplete={handleOnboardingComplete}
              onQuickStart={handleOnboardingQuickStart}
-             currentApiKey={apiKey}
-             onSaveApiKey={handleSaveApiKey}
            />
          )}
          <ModelConfigModal
@@ -344,8 +322,6 @@ function App() {
         <Onboarding 
           onComplete={handleOnboardingComplete}
           onQuickStart={handleOnboardingQuickStart}
-          currentApiKey={apiKey}
-          onSaveApiKey={handleSaveApiKey}
         />
       )}
 

@@ -1,7 +1,6 @@
 import React from 'react';
-import { Play, Download, FileVideo, Loader2 } from 'lucide-react';
+import { Play, Download, Loader2 } from 'lucide-react';
 import { STYLES, DownloadState } from './constants';
-import { useAlert } from '../GlobalAlert';
 
 interface Props {
   completedShotsCount: number;
@@ -20,7 +19,6 @@ const ActionButtons: React.FC<Props> = ({
   onPreview,
   onDownloadMaster
 }) => {
-  const { showAlert } = useAlert();
   const { isDownloading, phase, progress: downloadProgress } = downloadState;
 
   return (
@@ -51,14 +49,6 @@ const ActionButtons: React.FC<Props> = ({
           <Download className="w-4 h-4" />
         )}
         {isDownloading ? `${phase} ${downloadProgress}%` : `Download Master (${completedShotsCount}/${totalShots})`}
-      </button>
-      
-      <button 
-        className={STYLES.button.tertiary}
-        onClick={() => showAlert('暂未开发', { type: 'info', title: '提示' })}
-      >
-        <FileVideo className="w-4 h-4" />
-        Export EDL / XML
       </button>
     </div>
   );

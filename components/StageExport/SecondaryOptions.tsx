@@ -1,5 +1,5 @@
 import React from 'react';
-import { Layers, Share2, Clock, Loader2 } from 'lucide-react';
+import { Layers, Clock, Loader2 } from 'lucide-react';
 import { STYLES, DownloadState } from './constants';
 
 interface Props {
@@ -39,15 +39,7 @@ const SecondaryOptions: React.FC<Props> = ({
         </div>
       </div>
 
-      <div className={STYLES.card.base}>
-        <Share2 className="w-5 h-5 text-slate-600 group-hover:text-cyan-300 mb-4 transition-colors" />
-        <div>
-          <h4 className="text-sm font-bold text-white mb-1">Share Project</h4>
-          <p className="text-[10px] text-zinc-500">Create a view-only link for client review.</p>
-        </div>
-      </div>
-
-      <div 
+      <div
         onClick={onShowLogs}
         className={STYLES.card.base}
       >

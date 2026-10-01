@@ -1,5 +1,6 @@
 // Author: forsearch | Updated: 2026-06-26
 import { ProjectState, AssetLibraryItem } from '../types';
+import { DEFAULT_CHAT_MODEL } from '../types/model';
 
 const API_BASE = '/api';
 const LOCAL_STORAGE_CONFIG_PREFIX = 'manga_studio_config:';
@@ -243,7 +244,7 @@ export const createNewProjectState = (): ProjectState => {
     targetDuration: '60s',
     language: '中文',
     visualStyle: 'live-action',
-    shotGenerationModel: 'gpt-5.1',
+    shotGenerationModel: DEFAULT_CHAT_MODEL,
     rawScript: `标题：示例剧本
 
 场景 1

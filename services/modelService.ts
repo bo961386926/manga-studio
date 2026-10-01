@@ -7,7 +7,7 @@ import {
   VideoDuration,
 } from '../types/model';
 
-import { callChatApi, verifyApiKey as verifyChatApiKey, ApiKeyError } from './adapters/chatAdapter';
+import { callChatApi, ApiKeyError } from './adapters/chatAdapter';
 import { callImageApi } from './adapters/imageAdapter';
 import { callVideoApi } from './adapters/videoAdapter';
 import {
@@ -217,10 +217,6 @@ export const splitShot = async (options: {
   const prompt = buildShotSplitPrompt(options);
   const result = await chatJson({ prompt });
   return JSON.parse(result);
-};
-
-export const verifyApiKey = async (apiKey: string): Promise<{ success: boolean; message: string }> => {
-  return verifyChatApiKey(apiKey);
 };
 
 export const getApiKey = (): string | undefined => {

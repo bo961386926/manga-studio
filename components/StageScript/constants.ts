@@ -1,3 +1,5 @@
+import { DEFAULT_CHAT_MODEL } from '../../types/model';
+
 export const DURATION_OPTIONS = [
   { label: '30秒 (广告)', value: '30s' },
   { label: '60秒 (预告)', value: '60s' },
@@ -13,14 +15,6 @@ export const LANGUAGE_OPTIONS = [
   { label: '日本語 (Japanese)', value: 'Japanese' },
   { label: 'Français (French)', value: 'French' },
   { label: 'Español (Spanish)', value: 'Spanish' }
-];
-
-export const MODEL_OPTIONS = [
-  { label: 'GPT-5.1 (推荐)', value: 'gpt-5.1' },
-  { label: 'GPT-5.2', value: 'gpt-5.2' },
-  { label: 'GPT-4.1', value: 'gpt-41' },
-  { label: 'Claude Sonnet 4.5', value: 'claude-sonnet-4-5-20250929' },
-  { label: '其他 (自定义)', value: 'custom' }
 ];
 
 export const VISUAL_STYLE_OPTIONS = [
@@ -61,6 +55,6 @@ export const STYLES = {
 export const DEFAULTS = {
   duration: '60s',
   language: '中文',
-  model: 'gpt-5.1',
+  model: DEFAULT_CHAT_MODEL,
   visualStyle: 'live-action'
 };

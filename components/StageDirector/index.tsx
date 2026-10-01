@@ -2,6 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { LayoutGrid, Sparkles, Loader2, AlertCircle, Edit2, Film, Video as VideoIcon } from 'lucide-react';
 import { ProjectState, Shot, Keyframe, AspectRatio, VideoDuration } from '../../types';
+import { DEFAULT_CHAT_MODEL } from '../../types/model';
 import { generateImage, generateVideo, generateActionSuggestion, optimizeKeyframePrompt, optimizeBothKeyframes, enhanceKeyframePrompt, splitShotIntoSubShots, rewritePromptForModeration } from '../../services/geminiService';
 import { generateVideoWithPolling } from '../../services/modelService';
 import { getModelById } from '../../services/modelRegistry';
@@ -609,7 +610,7 @@ const StageDirector: React.FC<Props> = ({ project, updateProject, onApiKeyError 
     }
     
     const visualStyle = project.visualStyle || project.scriptData?.visualStyle || 'live-action';
-    const shotGenerationModel = project.shotGenerationModel || 'gpt-5.1';
+    const shotGenerationModel = project.shotGenerationModel || DEFAULT_CHAT_MODEL;
     
     setIsSplittingShot(true);
     

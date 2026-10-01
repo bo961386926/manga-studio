@@ -1,5 +1,6 @@
 // Author: forsearch | Updated: 2026-04-30
 import { ScriptData, Shot, Character, Scene, AspectRatio, VideoDuration } from "../types";
+import { DEFAULT_CHAT_MODEL } from "../types/model";
 import { proxyFetch, uploadMediaAsRef } from './apiClient';
 import { invokeChat, invokeImage, invokeVideo, getJob, listModels, makeIdempotencyKey } from './modelGatewayClient';
 import type { ModelDTO } from '../types/modelGateway';
@@ -26,7 +27,7 @@ export class ApiKeyError extends Error {
   }
 }
 
-let runtimeApiKey: string = process.env.API_KEY || "";
+let runtimeApiKey: string = "";
 
 export const setGlobalApiKey = (key: string) => {
   runtimeApiKey = key;
@@ -48,7 +49,11 @@ const resolveModel = (type: 'chat' | 'image' | 'video', modelId?: string) => {
     const candidates = getModels(type).filter(m => m.apiModel === modelId);
     if (candidates.length === 1) return candidates[0];
   }
-  return getActiveModel(type);
+  const fallbackModel = getActiveModel(type);
+  if (modelId) {
+    console.warn(`[Model] modelId "${modelId}" (${type}) 未在注册表中匹配到模型，回退到激活模型: ${fallbackModel?.id || '无'}`);
+  }
+  return fallbackModel;
 };
 
 const resolveRequestModel = (type: 'chat' | 'image' | 'video', modelId?: string): string => {
@@ -77,37 +82,18 @@ const checkApiKey = (type: 'chat' | 'image' | 'video' = 'chat', modelId?: string
   throw new ApiKeyError("API Key 缺失，请在模型配置 -> 全局配置中为对应服务商设置 API Key。");
 };
 
-const DEFAULT_API_BASE = 'http://api.gitcc.com';
-
 const SCRIPT_INPUT_MAX_CHARS = 120000;
 const LONG_FORM_MAX_TOKENS = 8192;
 const PARAGRAPHS_CHUNK_MAX_TOKENS = 8192;
 
 const getApiBase = (type: 'chat' | 'image' | 'video' = 'chat', modelId?: string): string => {
-  try {
-    const resolvedModel = resolveModel(type, modelId);
-    if (resolvedModel) {
-      return getApiBaseUrlForModel(resolvedModel.id);
-    }
-    return getDefaultApiBase();
-  } catch (e) {
-    return getDefaultApiBase();
+  // 模型与上游由注册表解析；解析不到时显式报错（旧 GitCC 硬编码兜底已移除——
+  // 本地 /api-proxy 已下线，legacy 直连在任何 base URL 上都必然失败，静默兜底只会误导用户）。
+  const resolvedModel = resolveModel(type, modelId);
+  if (resolvedModel) {
+    return getApiBaseUrlForModel(resolvedModel.id);
   }
-};
-
-const getDefaultApiBase = (): string => {
-  // The local /api-proxy shim is gone (stage-3 gate); legacy direct calls
-  // fail loudly via proxyFetch when no gateway model matches.
-  return DEFAULT_API_BASE;
-};
-
-const getActiveChatModelName = (): string => {
-  try {
-    const model = getActiveChatModel();
-    return model?.apiModel || model?.id || 'gpt-5.1';
-  } catch (e) {
-    return 'gpt-5.1';
-  }
+  throw new Error(`没有可用的${type === 'chat' ? '对话' : type === 'image' ? '图片' : '视频'}模型，请先完成模型配置迁移`);
 };
 
 const getVeoModelName = (hasReferenceImage: boolean, aspectRatio: AspectRatio): string => {
@@ -128,8 +114,6 @@ const getSoraVideoSize = (aspectRatio: AspectRatio): string => {
   };
   return sizeMap[aspectRatio];
 };
-
-const ANTSK_API_BASE = DEFAULT_API_BASE;
 
 // ==================== 服务端网关桥接 ====================
 // 模型调用优先走服务端网关（模型与凭据都在服务端，浏览器不持密钥）。
@@ -281,47 +265,6 @@ const generateVideoViaGateway = async (
   throw new Error('视频生成超时 (20分钟)');
 };
 
-export const verifyApiKey = async (key: string): Promise<{ success: boolean; message: string }> => {
-  try {
-    const apiBase = getApiBase('chat');
-    const response = await proxyFetch(`${apiBase}/v1/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${key}`
-      },
-      body: JSON.stringify({
-        model: 'gpt-41',
-        messages: [{ role: 'user', content: '仅返回1' }],
-        temperature: 0.1,
-        max_tokens: 5
-      })
-    });
-
-    if (!response.ok) {
-      let errorMessage = `验证失败: ${response.status}`;
-      try {
-        const errorData = await response.json();
-        errorMessage = errorData.error?.message || errorMessage;
-      } catch (e) {
-        // ignore
-      }
-      return { success: false, message: errorMessage };
-    }
-
-    const data = await response.json();
-    if (data.choices?.[0]?.message?.content !== undefined) {
-      return { success: true, message: 'API Key 验证成功' };
-    } else {
-      return { success: false, message: '返回格式异常' };
-    }
-  } catch (error: any) {
-    return { success: false, message: error.message || '网络错误' };
-  }
-};
-
-
-
 /**
  * 重试操作辅助函数，用于处理429限流错误、超时错误和其他临时性错误
  * @param operation - 要执行的异步操作函数
@@ -384,7 +327,7 @@ const cleanJsonString = (str: string): string => {
   return cleaned.trim();
 };
 
-const chatCompletion = async (prompt: string, model: string = 'gpt-5.1', temperature: number = 0.7, maxTokens: number = 8192, responseFormat?: 'json_object', timeout: number = 600000): Promise<string> => {
+const chatCompletion = async (prompt: string, model: string = DEFAULT_CHAT_MODEL, temperature: number = 0.7, maxTokens: number = 8192, responseFormat?: 'json_object', timeout: number = 600000): Promise<string> => {
   // 服务端网关优先：命中网关模型时调用经服务端代理（浏览器不持密钥）
   const gatewayText = await tryGatewayChat(prompt, model, responseFormat);
   if (gatewayText !== null) return gatewayText;
@@ -464,7 +407,7 @@ const chatCompletion = async (prompt: string, model: string = 'gpt-5.1', tempera
  */
 const chatCompletionStream = async (
   prompt: string,
-  model: string = 'gpt-5.1',
+  model: string = DEFAULT_CHAT_MODEL,
   temperature: number = 0.7,
   responseFormat: 'json_object' | undefined,
   timeout: number = 600000,
@@ -583,7 +526,7 @@ const chatCompletionStream = async (
  * 第一階段：只抽取結構（title, genre, logline, characters, scenes），避免單次輸出過長被截斷
  * 第二階段：按場景分塊抽取 storyParagraphs，每場景一次請求，再合併
  */
-export const parseScriptToData = async (rawText: string, language: string = '中文', model: string = 'gpt-5.1', visualStyle: string = 'live-action'): Promise<ScriptData> => {
+export const parseScriptToData = async (rawText: string, language: string = '中文', model: string = DEFAULT_CHAT_MODEL, visualStyle: string = 'live-action'): Promise<ScriptData> => {
   console.log('📝 parseScriptToData 调用（長文本兩階段）- 模型:', model, '视觉风格:', visualStyle);
   console.log(`[parseScriptToData] 输入文本长度: ${rawText.length} 字符`);
   const startTime = Date.now();
@@ -803,10 +746,10 @@ Output ONLY valid JSON: { "storyParagraphs": [ {"id": number, "text": "string", 
  * 根据剧本数据和目标时长，为每个场景生成适量的分镜头
  * 算法：目标时长(秒) ÷ 10秒/镜头 = 总镜头数，然后平均分配到各场景
  * @param scriptData - 剧本数据，包含场景、角色、目标时长等信息
- * @param model - 使用的AI模型，默认'gpt-5.1'
+ * @param model - 使用的AI模型，默认 DEFAULT_CHAT_MODEL
  * @returns 返回分镜头列表，每个镜头包含关键帧、镜头运动等信息
  */
-export const generateShotList = async (scriptData: ScriptData, model: string = 'gpt-5.1'): Promise<Shot[]> => {
+export const generateShotList = async (scriptData: ScriptData, model: string = DEFAULT_CHAT_MODEL): Promise<Shot[]> => {
   const overallStartTime = Date.now();
   
   if (!scriptData.scenes || scriptData.scenes.length === 0) {
@@ -1040,12 +983,12 @@ const NEGATIVE_PROMPTS: { [key: string]: string } = {
  * @param type - 类型，'character'（角色）或'scene'（场景）
  * @param data - 角色或场景的数据
  * @param genre - 剧本类型/题材
- * @param model - 使用的AI模型，默认'gpt-5.1'
+ * @param model - 使用的AI模型，默认 DEFAULT_CHAT_MODEL
  * @param visualStyle - 视觉风格，如'live-action'、'anime'等，默认'live-action'
  * @param language - 输出语言，默认'中文'
  * @returns 返回包含visualPrompt和negativePrompt的对象
  */
-export const generateVisualPrompts = async (type: 'character' | 'scene', data: Character | Scene, genre: string, model: string = 'gpt-5.1', visualStyle: string = 'live-action', language: string = '中文'): Promise<{ visualPrompt: string; negativePrompt: string }> => {
+export const generateVisualPrompts = async (type: 'character' | 'scene', data: Character | Scene, genre: string, model: string = DEFAULT_CHAT_MODEL, visualStyle: string = 'live-action', language: string = '中文'): Promise<{ visualPrompt: string; negativePrompt: string }> => {
    const stylePrompt = VISUAL_STYLE_PROMPTS[visualStyle] || visualStyle;
    const negativePrompt = NEGATIVE_PROMPTS[visualStyle] || NEGATIVE_PROMPTS['live-action'];
    
@@ -2409,7 +2352,7 @@ export const generateVideo = async (
  * @param model - 使用的AI模型
  * @returns 续写的内容
  */
-export const continueScript = async (existingScript: string, language: string = '中文', model: string = 'gpt-5.1'): Promise<string> => {
+export const continueScript = async (existingScript: string, language: string = '中文', model: string = DEFAULT_CHAT_MODEL): Promise<string> => {
   console.log('✍️ continueScript 调用 - 使用模型:', model);
   const startTime = Date.now();
   
@@ -2463,7 +2406,7 @@ ${existingScript}
 export const continueScriptStream = async (
   existingScript: string,
   language: string = '中文',
-  model: string = 'gpt-5.1',
+  model: string = DEFAULT_CHAT_MODEL,
   onDelta?: (delta: string) => void
 ): Promise<string> => {
   console.log('✍️ continueScriptStream 调用 - 使用模型:', model);
@@ -2633,7 +2576,7 @@ ${originalScript}
  * @param sceneInfo - 场景信息（地点、时间、氛围）
  * @param characterInfo - 角色信息（可选）
  * @param visualStyle - 视觉风格
- * @param model - 使用的模型，默认'gpt-5.1'
+ * @param model - 使用的模型，默认 DEFAULT_CHAT_MODEL
  * @returns 返回包含起始帧和结束帧的优化描述对象
  */
 export const optimizeBothKeyframes = async (
@@ -2642,7 +2585,7 @@ export const optimizeBothKeyframes = async (
   sceneInfo: { location: string; time: string; atmosphere: string },
   characterInfo: string[],
   visualStyle: string,
-  model: string = 'gpt-5.1'
+  model: string = DEFAULT_CHAT_MODEL
 ): Promise<{ startPrompt: string; endPrompt: string }> => {
   console.log('🎨 optimizeBothKeyframes 调用 - 同时优化起始帧和结束帧 - 使用模型:', model);
   const startTime = Date.now();
@@ -2800,7 +2743,7 @@ ${styleDesc}
  * @param sceneInfo - 场景信息（地点、时间、氛围）
  * @param characterInfo - 角色信息（可选）
  * @param visualStyle - 视觉风格
- * @param model - 使用的模型，默认'gpt-5.1'
+ * @param model - 使用的模型，默认 DEFAULT_CHAT_MODEL
  * @returns 返回AI优化后的关键帧视觉描述
  */
 export const optimizeKeyframePrompt = async (
@@ -2810,7 +2753,7 @@ export const optimizeKeyframePrompt = async (
   sceneInfo: { location: string; time: string; atmosphere: string },
   characterInfo: string[],
   visualStyle: string,
-  model: string = 'gpt-5.1'
+  model: string = DEFAULT_CHAT_MODEL
 ): Promise<string> => {
   console.log(`🎨 optimizeKeyframePrompt 调用 - ${frameType === 'start' ? '起始帧' : '结束帧'} - 使用模型:`, model);
   const startTime = Date.now();
@@ -2945,14 +2888,14 @@ ${frameType === 'start' ? `
  * @param startFramePrompt - 首帧提示词
  * @param endFramePrompt - 尾帧提示词
  * @param cameraMovement - 镜头运动
- * @param model - 使用的模型，默认'gpt-5.1'
+ * @param model - 使用的模型，默认 DEFAULT_CHAT_MODEL
  * @returns 返回AI生成的动作建议
  */
 export const generateActionSuggestion = async (
   startFramePrompt: string,
   endFramePrompt: string,
   cameraMovement: string,
-  model: string = 'gpt-5.1'
+  model: string = DEFAULT_CHAT_MODEL
 ): Promise<string> => {
   console.log('🎬 generateActionSuggestion 调用 - 使用模型:', model);
   const startTime = Date.now();
@@ -3043,7 +2986,7 @@ export const rewritePromptForModeration = async (
   videoPrompt: string,
   model?: string
 ): Promise<string> => {
-  const chatModel = model || getActiveChatModel()?.apiModel || getActiveChatModel()?.id || 'gpt-4o';
+  const chatModel = model || getActiveChatModel()?.apiModel || getActiveChatModel()?.id || DEFAULT_CHAT_MODEL;
   const prompt = `
 你是一位专业的影视剧本审稿与合规顾问。下面是一段用于 AI 视频生成的镜头描述，因涉及暴力、血腥或敏感表述被平台内容审核拦截。
 
@@ -3069,7 +3012,7 @@ ${videoPrompt}
  * @param sceneInfo - 场景信息（地点、时间、氛围）
  * @param characterNames - 角色名称数组
  * @param visualStyle - 视觉风格
- * @param model - 使用的模型，默认'gpt-5.1'
+ * @param model - 使用的模型，默认 DEFAULT_CHAT_MODEL
  * @returns 返回包含子镜头数组的对象
  */
 export const splitShotIntoSubShots = async (
@@ -3077,7 +3020,7 @@ export const splitShotIntoSubShots = async (
   sceneInfo: { location: string; time: string; atmosphere: string },
   characterNames: string[],
   visualStyle: string,
-  model: string = 'gpt-5.1'
+  model: string = DEFAULT_CHAT_MODEL
 ): Promise<{ subShots: any[] }> => {
   console.log('✂️ splitShotIntoSubShots 调用 - 使用模型:', model);
   const startTime = Date.now();
@@ -3338,7 +3281,7 @@ ${shot.dialogue ? `**对白：** "${shot.dialogue}"
  * @param visualStyle - 视觉风格
  * @param cameraMovement - 镜头运动
  * @param frameType - 帧类型(start/end)
- * @param model - 使用的模型,默认'gpt-5.1'
+ * @param model - 使用的模型,默认 DEFAULT_CHAT_MODEL
  * @returns 返回增强后的提示词
  */
 export const enhanceKeyframePrompt = async (
@@ -3346,7 +3289,7 @@ export const enhanceKeyframePrompt = async (
   visualStyle: string,
   cameraMovement: string,
   frameType: 'start' | 'end',
-  model: string = 'gpt-5.1'
+  model: string = DEFAULT_CHAT_MODEL
 ): Promise<string> => {
   console.log(`🎨 enhanceKeyframePrompt 调用 - ${frameType === 'start' ? '起始帧' : '结束帧'} - 使用模型:`, model);
   const startTime = Date.now();
