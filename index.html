@@ -8,8 +8,8 @@
     
     <title>漫剧工场 - 工业级 AI 漫剧与视频生成工作台</title>
     <meta name="title" content="漫剧工场 - 工业级 AI 漫剧与视频生成工作台" />
-    <meta name="description" content="专为 AI 漫剧、动态漫画及影视分镜设计的专业生产力工具。采用关键帧驱动工作流，支持角色一致性保证、工业化生产流程，基于 GPT-5.1、Gemini-3-Pro 和 Veo 3.1 模型。" />
-    <meta name="keywords" content="AI漫剧,AI视频生成,动态漫画,影视分镜,Motion Comics,Animatic,关键帧生成,角色一致性,Veo,GPT,Gemini,AI导演,视频制作工具" />
+    <meta name="description" content="专为 AI 漫剧、动态漫画及影视分镜设计的专业生产力工具。采用关键帧驱动工作流，支持角色一致性保证与工业化生产流程，可接入多家主流大模型。" />
+    <meta name="keywords" content="AI漫剧,AI视频生成,动态漫画,影视分镜,Motion Comics,Animatic,关键帧生成,角色一致性,AI导演,视频制作工具" />
     <meta name="author" content="forsearch" />
     <meta name="robots" content="index, follow" />
     <meta name="language" content="Chinese" />
@@ -52,11 +52,6 @@
         "price": "0",
         "priceCurrency": "CNY"
       },
-      "aggregateRating": {
-        "@type": "AggregateRating",
-        "ratingValue": "4.8",
-        "ratingCount": "156"
-      },
       "creator": {
         "@type": "Organization",
         "name": "forsearch",
@@ -74,11 +69,8 @@
     }
     </script>
     
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
     <style>
       body {
-        font-family: 'Inter', sans-serif;
         background-color: #050505;
         color: #e5e5e5;
       }
@@ -98,9 +90,9 @@
       }
       
       .font-mono {
-        font-family: 'JetBrains Mono', monospace;
+        font-family: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, monospace;
       }
-      
+
       .glass-panel {
         background: rgba(20, 20, 20, 0.6);
         backdrop-filter: blur(12px);
@@ -121,33 +113,7 @@
         color: #ffffff;
       }
     </style>
-  <script>
-    // 主题初始化(防闪烁):auto=跟随系统,light/dark=手动指定
-    (function () {
-      function getSaved() {
-        try { return localStorage.getItem('ai_manga_theme') || 'auto'; } catch (e) { return 'auto'; }
-      }
-      function applyTheme() {
-        var saved = getSaved();
-        var isLight;
-        if (saved === 'light') isLight = true;
-        else if (saved === 'dark') isLight = false;
-        else isLight = !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches);
-        document.documentElement.classList.toggle('light', isLight);
-        document.documentElement.setAttribute('data-theme', saved);
-      }
-      applyTheme();
-      // auto 模式下实时跟随系统主题变化
-      if (window.matchMedia) {
-        var mq = window.matchMedia('(prefers-color-scheme: light)');
-        var onSystemChange = function () {
-          if (getSaved() === 'auto') applyTheme();
-        };
-        if (mq.addEventListener) mq.addEventListener('change', onSystemChange);
-        else if (mq.addListener) mq.addListener(onSystemChange);
-      }
-    })();
-  </script>
+  <script src="/theme-init.js"></script>
   <style id="theme-light-css">
     /* ===== 浅色主题覆盖层(html.light 时生效)===== */
     html.light body {
@@ -201,17 +167,6 @@
     html.light ::-webkit-scrollbar-track { background: #e2e8f0 !important; }
     html.light ::-webkit-scrollbar-thumb { background: #94a3b8 !important; }
   </style>
-  <script type="importmap">
-{
-  "imports": {
-    "react": "https://aistudiocdn.com/react@^19.2.0",
-    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
-    "react/": "https://aistudiocdn.com/react@^19.2.0/",
-    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.30.0",
-    "lucide-react": "https://aistudiocdn.com/lucide-react@^0.554.0"
-  }
-}
-</script>
 </head>
   <body>
     <div id="root"></div>

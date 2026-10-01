@@ -3,4 +3,5 @@
 # ERR_PNPM_IGNORED_BUILDS.
 allowBuilds:
   electron: true
+  electron-winstaller: false
   esbuild: true

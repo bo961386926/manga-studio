@@ -9,8 +9,9 @@ COPY scripts ./scripts
 
 # 镜像内只需 Vite 打包，不装 electron / electron-builder（依赖树极大，npm 会长时间停在 deprecated 警告后解析/下载，看起来像“卡住”）
 # 与 package.json 中 devDependencies 保持一致，避免镜像与本地行为漂移
+# tailwind/postcss/autoprefixer 为构建期必需（Tailwind 预编译，替代旧 CDN 方案），必须一并装
 RUN npm install --omit=dev && \
-    npm install --no-save vite@^6.2.0 @vitejs/plugin-react@^4.2.0 typescript@~5.8.2 @types/node@^22.14.0
+    npm install --no-save vite@^6.2.0 @vitejs/plugin-react@^4.2.0 typescript@~5.8.2 @types/node@^22.14.0 tailwindcss@^3.4.17 postcss@^8.4.0 autoprefixer@^10.4.0
 
 COPY . .
 

@@ -1,4 +1,7 @@
 // Author: forsearch | Updated: 2026-04-30
+import '@fontsource-variable/inter';
+import '@fontsource-variable/jetbrains-mono';
+import './styles/app.css';
 import React, { useEffect, useState } from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
