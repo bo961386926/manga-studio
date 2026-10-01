@@ -2,6 +2,9 @@ FROM node:22-alpine
 
 WORKDIR /app
 
+# 自动备份链路依赖：pg_dump（大版本需与服务端 postgres 16 对齐）+ age（可选备份加密）
+RUN apk add --no-cache postgresql16-client age
+
 COPY package*.json ./
 
 RUN npm install --omit=dev

@@ -1,7 +1,15 @@
+# 日志轮转：默认 json-file 无限增长会吃满磁盘
+x-default-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   postgres:
     image: postgres:16-alpine
     container_name: manga-studio-db
+    logging: *default-logging
     environment:
       POSTGRES_DB: manga_studio
       POSTGRES_USER: postgres
@@ -55,6 +63,15 @@ services:
       - SMTP_PASSWORD=${SMTP_PASSWORD:-}
       - SMTP_FROM=${SMTP_FROM:-no-reply@example.com}
       - BOOTSTRAP_ADMIN_EMAIL=${BOOTSTRAP_ADMIN_EMAIL:-}
+      # 备份：容器内调度（见 server/backup.js），产物必须落卷，否则随容器重建丢失；
+      # 设置 BACKUP_AGE_RECIPIENT（age 公钥）后自动加密为 .dump.age
+      - BACKUP_DISABLED=${BACKUP_DISABLED:-false}
+      - BACKUP_INTERVAL_HOURS=${BACKUP_INTERVAL_HOURS:-24}
+      - BACKUP_KEEP=${BACKUP_KEEP:-14}
+      - BACKUP_INITIAL_DELAY_MS=${BACKUP_INITIAL_DELAY_MS:-600000}
+      - BACKUP_AGE_RECIPIENT=${BACKUP_AGE_RECIPIENT:-}
+    volumes:
+      - backups:/app/backups
     depends_on:
       postgres:
         condition: service_healthy
@@ -65,17 +82,21 @@ services:
       timeout: 5s
       retries: 12
     restart: unless-stopped
+    logging: *default-logging
     networks:
       - manga-studio-network
 
-  # 本地开发用假邮件服务器：所有验证/重置邮件落在 http://localhost:8025 网页里，
-  # 生产部署删除本服务即可（生产用真实 SMTP）。
+  # 本地开发用假邮件服务器：所有验证/重置邮件落在 http://localhost:8025 网页里。
+  # profiles 门控：生产 `up -d` 不会启动；本地调试显式加 `--profile dev`。
   mailpit:
     image: axllent/mailpit:latest
     container_name: manga-studio-mailpit
+    profiles:
+      - dev
     ports:
       - "8025:8025"
     restart: unless-stopped
+    logging: *default-logging
     networks:
       - manga-studio-network
 
@@ -87,18 +108,24 @@ services:
     container_name: manga-studio-app
     ports:
       - "3005:80"
-      - "3006:80"
     environment:
       - NODE_ENV=production
     depends_on:
       api:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1/ >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
     restart: unless-stopped
+    logging: *default-logging
     networks:
       - manga-studio-network
 
 volumes:
   pgdata:
+  backups:
 
 networks:
   manga-studio-network:

@@ -2,7 +2,10 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+      # 开发分支也要跑 CI（此前只在 main 触发，feat 分支从未真实验证过）
+      - 'feat/**'
   pull_request:
     branches: [main]
 

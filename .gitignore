@@ -88,3 +88,11 @@ backups/
 recovered-assets/
 repair.mjs
 server/extract.mjs
+
+# TLS 证书与私钥（docker-compose.tls.yaml 挂载 deploy/certs/，绝不入库）
+deploy/certs/
+*.key
+age.key
+
+# 服务端调度备份目录（本地 dev 时 cwd=server/）
+server/backups/

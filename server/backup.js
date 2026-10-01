@@ -1,4 +1,5 @@
-// Scheduled database backups. Runs scripts/backup-db.js on an interval
+// Scheduled database backups. Runs scripts/backup-db.js (next to this file,
+// packaged into the api image at /app/scripts/) on an interval
 // (BACKUP_INTERVAL_HOURS, default 24) in an unref'd timer so it never blocks
 // shutdown. The first backup runs after BACKUP_INITIAL_DELAY_MS (default 10
 // minutes) so a fresh server doesn't backup mid-startup.
@@ -7,7 +8,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ROOT = path.join(__dirname, '..');
+
+// 脚本与本文件同目录下的 scripts/backup-db.js（仓库布局与容器布局一致，
+// 均为 <server>/scripts/backup-db.js；历史相对路径 <repo>/scripts 已随脚本
+// 迁移失效，见 test/backup-scheduler-path.test.js 回归防护）。
+export const getBackupScriptPath = () => path.join(__dirname, 'scripts', 'backup-db.js');
 
 export const startBackupScheduler = () => {
   if (process.env.BACKUP_DISABLED === 'true') return null;
@@ -15,8 +20,8 @@ export const startBackupScheduler = () => {
   const initialDelayMs = parseInt(process.env.BACKUP_INITIAL_DELAY_MS || String(10 * 60 * 1000), 10);
 
   const runOnce = () => {
-    const child = spawn(process.execPath, [path.join(ROOT, 'scripts', 'backup-db.js')], {
-      cwd: ROOT,
+    const child = spawn(process.execPath, [getBackupScriptPath()], {
+      cwd: __dirname,
       env: process.env,
       stdio: 'inherit',
     });
