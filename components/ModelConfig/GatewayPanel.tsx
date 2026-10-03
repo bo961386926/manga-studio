@@ -14,6 +14,7 @@ import {
   deleteModel,
 } from '../../services/modelGatewayClient';
 import type { ProviderDTO, ModelDTO } from '../../types/modelGateway';
+import { broadcastGatewayModelsChanged } from '../../services/gatewayModels';
 import { fetchMe, SessionUser } from '../../services/authClient';
 import { registerModel } from '../../services/modelRegistry';
 
@@ -68,6 +69,8 @@ export default function GatewayPanel() {
       const [ps, ms] = await Promise.all([listProviders(), listModels()]);
       setProviders(ps);
       setModels(ms);
+      // 服务商/模型可能刚增删：失效统一缓存并广播，让各阶段选择器立即刷新
+      broadcastGatewayModelsChanged();
     } catch (e: any) {
       setError(e?.message || '加载失败');
     } finally {

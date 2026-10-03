@@ -5,7 +5,7 @@ import { ProjectState, Shot, Keyframe, AspectRatio, VideoDuration } from '../../
 import { DEFAULT_CHAT_MODEL } from '../../types/model';
 import { generateImage, generateVideo, generateActionSuggestion, optimizeKeyframePrompt, optimizeBothKeyframes, enhanceKeyframePrompt, splitShotIntoSubShots, rewritePromptForModeration } from '../../services/geminiService';
 import { generateVideoWithPolling } from '../../services/modelService';
-import { getModelById } from '../../services/modelRegistry';
+import { resolveGatewayModel } from '../../services/gatewayModels';
 import { 
   getRefImagesForShot, 
   buildKeyframePrompt,
@@ -221,10 +221,11 @@ const StageDirector: React.FC<Props> = ({ project, updateProject, onApiKeyError 
     }));
     
     try {
-      const gatewayModel = getModelById(selectedModel)?.adapter_kind === 'gateway';
+      // 多服务商改造：统一解析器按显式模型 id 解析；命中网关 → 异步任务+轮询（保留状态回调）
+      const gatewayModel = await resolveGatewayModel('video', selectedModel);
       const videoUrl = gatewayModel
         ? await generateVideoWithPolling(
-            { prompt: videoPrompt, aspectRatio, duration },
+            { prompt: videoPrompt, aspectRatio, duration, modelId: gatewayModel.id },
             { onStatus: (s) => setIsAIGenerating(s === 'polling' || s === 'queued' || s === 'submitting') }
           )
         : await generateVideo(

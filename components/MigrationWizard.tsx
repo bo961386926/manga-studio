@@ -54,9 +54,9 @@ export default function MigrationWizard({ user }: { user: SessionUser }) {
       const { refreshCsrf } = await import('../services/authClient');
       await refreshCsrf();
       await importRemoteEnvelope(envelope, importPassword, window.location.hostname || 'web');
-      // 服务端模型清单已变化，让 geminiService 的网关模型缓存立即失效
-      const { invalidateGatewayModelCache } = await import('../services/geminiService');
-      invalidateGatewayModelCache();
+      // 服务端模型清单已变化：失效缓存并广播，让各阶段选择器立即刷新
+      const { broadcastGatewayModelsChanged } = await import('../services/gatewayModels');
+      broadcastGatewayModelsChanged();
       setImportMsg('迁移包导入成功');
       setImportFile(null);
       setImportPassword('');
@@ -95,6 +95,8 @@ export default function MigrationWizard({ user }: { user: SessionUser }) {
                         const { refreshCsrf } = await import('../services/authClient');
                         await refreshCsrf();
                         await uploadLegacyConfig(summary);
+                        const { broadcastGatewayModelsChanged } = await import('../services/gatewayModels');
+                        broadcastGatewayModelsChanged();
                         setUploaded(true);
                       } catch (e: any) {
                         setError(e?.message || '上传失败');

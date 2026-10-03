@@ -2,7 +2,7 @@
 import { ScriptData, Shot, Character, Scene, AspectRatio, VideoDuration } from "../types";
 import { DEFAULT_CHAT_MODEL } from "../types/model";
 import { proxyFetch, uploadMediaAsRef } from './apiClient';
-import { invokeChat, invokeImage, invokeVideo, getJob, listModels, makeIdempotencyKey } from './modelGatewayClient';
+import { invokeChat, invokeImage, invokeVideo, getJob, makeIdempotencyKey } from './modelGatewayClient';
 import type { ModelDTO } from '../types/modelGateway';
 import { addRenderLogWithTokens } from './renderLogService';
 import { throwFromVideoHttpError, formatModerationBlockedForUser } from './videoHttpErrors';
@@ -117,48 +117,17 @@ const getSoraVideoSize = (aspectRatio: AspectRatio): string => {
 
 // ==================== 服务端网关桥接 ====================
 // 模型调用优先走服务端网关（模型与凭据都在服务端，浏览器不持密钥）。
-// 网关模型来自服务端 /api/model-invocations/models（通常由迁移向导把本地
-// 配置导入生成）。未命中网关模型时回退到旧厂商直连路径——该路径已随
-// /api/ai-forward 下线而失效，会以明确错误提示用户完成迁移。
+// 解析/缓存/默认模型统一在 services/gatewayModels.ts（多服务商/多模型改造的
+// 唯一解析口：id 精确匹配优先，name/apiModel 兼容旧存量值，单模型自动采用）。
+// 未命中网关模型时回退到旧厂商直连路径——该路径已随 /api/ai-forward 下线而失效，
+// 会以明确错误提示用户完成迁移。
+import {
+  loadGatewayModels,
+  invalidateGatewayModelCache,
+  resolveGatewayModel,
+} from './gatewayModels';
 
-let gatewayModelCache: { at: number; models: ModelDTO[] } | null = null;
-const GATEWAY_MODEL_TTL_MS = 60_000;
-
-const loadGatewayModels = async (force = false): Promise<ModelDTO[]> => {
-  if (!force && gatewayModelCache && Date.now() - gatewayModelCache.at < GATEWAY_MODEL_TTL_MS) {
-    return gatewayModelCache.models;
-  }
-  try {
-    const models = await listModels();
-    gatewayModelCache = {
-      at: Date.now(),
-      models: (models || []).filter((m: any) => m.enabled && !m.deleted_at),
-    };
-    return gatewayModelCache.models;
-  } catch (e: any) {
-    console.warn('[Gateway] 网关模型列表获取失败（未登录或网关不可用）:', e?.message);
-    return [];
-  }
-};
-
-export const invalidateGatewayModelCache = (): void => {
-  gatewayModelCache = null;
-};
-
-const resolveGatewayModel = async (
-  capability: 'chat' | 'image' | 'video',
-  modelName?: string
-): Promise<ModelDTO | null> => {
-  const models = await loadGatewayModels();
-  const ofCap = models.filter((m) => m.capability === capability);
-  if (ofCap.length === 0) return null;
-  if (modelName) {
-    const byName = ofCap.find((m) => m.name === modelName || m.apiModel === modelName);
-    if (byName) return byName;
-  }
-  // 未按名匹配时：该能力只有一个网关模型就直接使用（单模型部署的常见形态）
-  return ofCap.length === 1 ? ofCap[0] : null;
-};
+export { invalidateGatewayModelCache };
 
 const fetchAssetAsDataUrl = async (assetId: string): Promise<string> => {
   const res = await fetch(`/api/model-invocations/media-assets/${assetId}/content`);

@@ -18,6 +18,7 @@ import {
 } from './modelRegistry';
 import { setGlobalApiKey as setGeminiApiKey } from './geminiService';
 import { invokeChat, invokeImage, invokeVideo, makeIdempotencyKey } from './modelGatewayClient';
+import { resolveGatewayModel } from './gatewayModels';
 import type { JobAcceptedV1 } from '../types/modelGateway';
 
 export { ApiKeyError };
@@ -109,11 +110,13 @@ export const generateVideo = async (options: VideoGenerateOptions): Promise<stri
 };
 
 // Async video via the gateway: returns an accepted job to poll.
+// 模型经统一解析器解析显式 modelId（选择器值=网关模型 id）；单模型场景自动采用。
+// 不再看客户端目录的激活态——那是多服务商改造前的死路。
 export const generateVideoGatewayJob = async (
   options: VideoGenerateOptions
 ): Promise<JobAcceptedV1> => {
-  const gw = gatewayModelFor('video');
-  if (!gw) throw new Error('当前未激活网关视频模型');
+  const gw = await resolveGatewayModel('video', (options as any).modelId);
+  if (!gw) throw new Error('没有可用的网关视频模型——请到「模型配置 → 网关」添加视频能力模型');
   return invokeVideo(
     gw.id,
     {

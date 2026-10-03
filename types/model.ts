@@ -107,6 +107,8 @@ export interface VideoGenerateOptions {
   endImage?: string;
   aspectRatio?: AspectRatio;
   duration?: VideoDuration;
+  /** 网关模型 id（多服务商改造后由选择器显式传入；缺省走单模型自动采用） */
+  modelId?: string;
 }
 
 export const DEFAULT_CHAT_PARAMS: ChatModelParams = {
