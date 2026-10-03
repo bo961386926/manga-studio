@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildAudioMixPlan } from '../services/videoMerger';
+import { buildAudioMixPlan, buildSubtitleMergeArgs } from "../services/videoMerger";
 describe('buildAudioMixPlan', () => {
   it('narration + bgm → concat then amix with bgm volume', () => {
     const plan = buildAudioMixPlan({ narrationPaths: ['n1.mp3', 'n2.mp3'], bgmPath: 'bgm.mp3', bgmVolume: 0.25 });
@@ -18,5 +18,22 @@ describe('buildAudioMixPlan', () => {
   });
   it('nothing → null', () => {
     expect(buildAudioMixPlan({ narrationPaths: [] })).toBeNull();
+  });
+});
+describe('buildSubtitleMergeArgs + audioMix', () => {
+  it('offsets audio labels after subtitle PNG inputs and maps aout', () => {
+    const plan = buildAudioMixPlan({ narrationPaths: ['n.mp3'], bgmPath: 'bgm.mp3' });
+    const args = buildSubtitleMergeArgs({
+      listFile: 'list.txt', outputName: 'out.mp4',
+      overlays: [{ file: 's1.png', startSeconds: 0, endSeconds: 2 }],
+      audioMix: plan!,
+    });
+    expect(args).toContain('-stream_loop');
+    const fc = args[args.indexOf('-filter_complex') + 1];
+    expect(fc).toContain('[1:v]');
+    expect(fc).toContain('[2:a]concat=n=1:v=0:a=1[narr]');
+    expect(fc).toContain('[3:a]volume=0.25[bgm]');
+    expect(args.filter(a => a === '-map')).toHaveLength(2);
+    expect(args).toContain('[aout]');
   });
 });

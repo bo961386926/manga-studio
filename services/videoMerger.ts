@@ -53,8 +53,9 @@ export const buildSubtitleMergeArgs = (options: {
   listFile: string;
   outputName: string;
   overlays: SubtitleOverlay[];
+  audioMix?: AudioMixPlan;
 }): string[] => {
-  const { listFile, outputName, overlays } = options;
+  const { listFile, outputName, overlays, audioMix } = options;
   if (overlays.length === 0) {
     throw new Error('字幕叠加计划为空');
   }
@@ -67,12 +68,23 @@ export const buildSubtitleMergeArgs = (options: {
       return `${main}[${i + 1}:v]overlay=(W-w)/2:H-h-48:${enable}${out}`;
     })
     .join(';');
+  // 音频输入紧跟字幕 PNG 输入之后（concat 主输入 0，PNG 从 1 起），
+  // 因此混音计划的标签索引整体偏移 overlays.length + 1。
+  const shifted: AudioMixPlan | undefined = audioMix
+    ? {
+        inputs: audioMix.inputs,
+        outLabel: audioMix.outLabel,
+        filter: audioMix.filter.replace(/\[(\d+):a\]/g, (_, n) => `[${Number(n) + overlays.length + 1}:a]`),
+      }
+    : undefined;
   return [
     '-f', 'concat', '-safe', '0',
     '-i', listFile,
     ...inputs,
-    '-filter_complex', chain,
+    ...(shifted ? audioMix!.inputs : []),
+    '-filter_complex', shifted ? `${chain};${shifted.filter}` : chain,
     '-map', '[vout]',
+    ...(shifted ? ['-map', `[${shifted.outLabel}]`] : []),
     '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
     '-c:a', 'aac',
     outputName,
@@ -84,6 +96,12 @@ export interface MergeOptions {
   subtitleCues?: SubtitleCue[];
   /** 测试/特殊场景可注入的自定义渲染器；缺省用 canvas 渲染 */
   renderCuePng?: (cue: SubtitleCue) => Promise<Uint8Array>;
+  /** 旁白音频文件路径（按镜头顺序，将 concat 为一条音轨） */
+  narrationPaths?: string[];
+  /** BGM 音频文件路径（循环垫底） */
+  bgmPath?: string;
+  /** BGM 音量（默认 0.25） */
+  bgmVolume?: number;
 }
 
 /**
