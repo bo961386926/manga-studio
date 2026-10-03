@@ -31,6 +31,7 @@ import { authRouter } from './auth/routes.js';
 import { adminRouter } from './auth/admin-routes.js';
 import { migrationRouter } from './routes/migration.js';
 import { modelGatewayRouter } from './routes/model-gateway.js';
+import { trackEvent } from './analytics.js';
 import { pool } from './db.js';
 import { startOutboxWorker } from './auth/outbox.js';
 import { startNotificationScheduler } from './notifications.js';
@@ -112,7 +113,11 @@ app.post('/api/projects', wrap(requireUser), wrap(csrfProtection), async (req, r
     const shotsCount = Array.isArray(data.shots) ? data.shots.length : 0;
     const renderLogsCount = Array.isArray(data.renderLogs) ? data.renderLogs.length : 0;
     console.log(`[API] saveProject - id: ${id}, title: "${title}", payload: ${(payloadSize / 1024 / 1024).toFixed(2)}MB, shots: ${shotsCount}, renderLogs: ${renderLogsCount}`);
+    const existed = await pool.query(`SELECT 1 FROM projects WHERE user_id = $1 AND id = $2`, [req.user.user_id, id]);
     await saveProject(req.user.user_id, id, { id, ...data });
+    if (existed.rowCount === 0) {
+      await trackEvent({ userId: req.user.user_id, event: 'project_created', props: { projectId: id } });
+    }
     console.log(`[API] saveProject - 保存成功: ${id}`);
     res.json({ success: true });
   } catch (e) {

@@ -19,6 +19,17 @@ export const listAdminUsers = (q = ''): Promise<AdminUserRow[]> =>
 export const getStatsOverview = (): Promise<Record<string, number>> =>
   apiFetch('/admin/stats/overview');
 
+export interface FunnelStats {
+  registered: number;
+  verified: number;
+  project_created: number;
+  first_generation: number;
+  became_vip: number;
+}
+
+export const getStatsFunnel = (): Promise<{ funnel: FunnelStats; events: Array<{ event: string; count: number }> }> =>
+  apiFetch('/admin/stats/funnel');
+
 export const getRegistrationOpen = (): Promise<boolean> =>
   apiFetch('/admin/registration').then((r: any) => Boolean(r.open));
 

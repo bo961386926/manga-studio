@@ -9,6 +9,7 @@ import {
   deleteAnnouncement,
   disableUser,
   getRegistrationOpen,
+  getStatsFunnel,
   getStatsOverview,
   grantVip,
   listAdminUsers,
@@ -50,6 +51,7 @@ export default function AdminPanel({ onBack }: { onBack: () => void }) {
   const [annLevel, setAnnLevel] = useState<'info' | 'warning' | 'critical'>('info');
   const [annEndsAt, setAnnEndsAt] = useState('');
   const [stats, setStats] = useState<Record<string, number> | null>(null);
+  const [funnel, setFunnel] = useState<Awaited<ReturnType<typeof getStatsFunnel>> | null>(null);
   const [users, setUsers] = useState<AdminUserRow[]>([]);
   const [query, setQuery] = useState('');
   const [regOpen, setRegOpen] = useState<boolean | null>(null);
@@ -68,6 +70,9 @@ export default function AdminPanel({ onBack }: { onBack: () => void }) {
 
   const loadOverview = useCallback(async () => {
     setStats(await getStatsOverview());
+    try {
+      setFunnel(await getStatsFunnel());
+    } catch (_) { /* 漏斗加载失败不阻塞总览 */ }
   }, []);
 
   const loadUsers = useCallback(async (q = '') => {

@@ -2,6 +2,7 @@
 // Every route requires an admin session; high-risk actions additionally
 // require recent reauthentication (15-minute window).
 import { Router } from 'express';
+import { funnelStats, eventCounts } from '../analytics.js';
 import { pool, withTransaction } from '../db.js';
 import {
   requireUser,
@@ -295,6 +296,17 @@ adminRouter.get(
       failure_rate_24h:
         s.invocations_24h > 0 ? Number((s.invocations_failed_24h / s.invocations_24h).toFixed(4)) : 0,
     });
+  })
+);
+
+adminRouter.get(
+  '/stats/funnel',
+  adminLimiter,
+  wrap(requireAdmin),
+  wrap(async (req, res) => {
+    const funnel = await funnelStats();
+    const events = await eventCounts({ days: 7 });
+    res.json({ funnel, events });
   })
 );
 

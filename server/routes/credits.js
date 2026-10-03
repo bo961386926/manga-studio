@@ -5,6 +5,7 @@ import { requireUser, wrap } from '../auth/middleware.js';
 import { PolicyError } from '../model-gateway/policy.js';
 import { getBalance } from '../credits.js';
 import { checkIn, redeemCode, getReferralInfo } from '../activities.js';
+import { trackEvent } from '../analytics.js';
 
 export const creditsRouter = Router();
 
@@ -26,7 +27,9 @@ creditsRouter.post(
   '/redeem',
   wrap(async (req, res) => {
     try {
-      res.json(await redeemCode(req.user.user_id, req.body?.code));
+      const result = await redeemCode(req.user.user_id, req.body?.code);
+      await trackEvent({ userId: req.user.user_id, event: 'credit_redeemed', props: { credits: result?.credits } });
+      res.json(result);
     } catch (e) {
       if (e instanceof PolicyError) return res.status(e.status).json({ error: e.message, code: e.code });
       throw e;

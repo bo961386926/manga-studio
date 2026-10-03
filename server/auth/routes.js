@@ -33,6 +33,7 @@ import {
   wrap,
 } from './middleware.js';
 import { isRegistrationOpen } from './entitlements.js';
+import { trackEvent } from '../analytics.js';
 import { recordAudit } from './audit.js';
 
 export const authRouter = Router();
@@ -128,6 +129,7 @@ authRouter.post(
       });
     });
     if (createdUserId) {
+      await trackEvent({ userId: createdUserId, event: 'user_registered' });
       await recordAudit({
         actorUserId: null,
         targetUserId: createdUserId,
