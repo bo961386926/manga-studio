@@ -73,14 +73,23 @@ authRouter.post(
       return res.status(422).json({ error: 'invalid email or password' });
     }
     const passwordHash = await hashPassword(password);
+    // 本地开发逃生阀：EMAIL_VERIFICATION_DISABLED=true 时注册直接激活（等价于
+    // 验证链接已点击），不发验证邮件。生产环境绝不设置该变量，流程保持原样。
+    const skipEmailVerification = process.env.EMAIL_VERIFICATION_DISABLED === 'true';
     let createdUserId = null;
     await withTransaction(async (client) => {
       const { rows } = await client.query(
-        `INSERT INTO users (id, email, email_normalized, password_hash, role, status)
-         VALUES (gen_random_uuid(), $1, $2, $3, 'user', 'pending_verification')
+        `INSERT INTO users (id, email, email_normalized, password_hash, role, status, email_verified_at)
+         VALUES (gen_random_uuid(), $1, $2, $3, 'user', $4, $5)
          ON CONFLICT (email_normalized) DO NOTHING
          RETURNING id`,
-        [normalized, normalized, passwordHash]
+        [
+          normalized,
+          normalized,
+          passwordHash,
+          skipEmailVerification ? 'active' : 'pending_verification',
+          skipEmailVerification ? new Date() : null,
+        ]
       );
       if (rows.length === 0) return; // already registered; never leak account existence
       createdUserId = rows[0].id;
@@ -88,6 +97,7 @@ authRouter.post(
       await ensureCreditAccount(client, createdUserId);
       // 邀请码绑定（无效码静默忽略，不打断注册）
       await bindReferral(client, createdUserId, req.body?.referralCode);
+      if (skipEmailVerification) return;
       const { id: actionTokenId, token: actionToken } = await makeToken(client, {
         userId: createdUserId,
         purpose: 'verify_email',

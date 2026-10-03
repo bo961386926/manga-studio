@@ -58,6 +58,32 @@ test('registration creates unverified user and queues verification email', async
   assert.equal(await countOutbox('verify_email'), 1);
 });
 
+test('EMAIL_VERIFICATION_DISABLED=true skips verification: user activates immediately (local dev bypass)', async () => {
+  process.env.EMAIL_VERIFICATION_DISABLED = 'true';
+  const outboxBefore = await countOutbox('verify_email');
+  try {
+    const response = await request('/api/auth/register', {
+      method: 'POST',
+      json: { email: 'skip-verify@example.com', password: '1234567890' },
+    });
+    assert.equal(response.status, 202);
+    const user = await findUser('skip-verify@example.com');
+    assert.ok(user, 'user must be created');
+    assert.equal(user.status, 'active');
+    assert.ok(user.email_verified_at, 'email_verified_at must be set when verification is skipped');
+    assert.equal(await countOutbox('verify_email'), outboxBefore, 'no verification email should be queued');
+
+    const login = await request('/api/auth/login', {
+      method: 'POST',
+      json: { email: 'SKIP-VERIFY@example.com', password: '1234567890' },
+    });
+    assert.equal(login.status, 200, 'registration must be immediately usable for login');
+    assert.ok(setCookie(login).includes(`${SESSION_COOKIE}=`));
+  } finally {
+    delete process.env.EMAIL_VERIFICATION_DISABLED;
+  }
+});
+
 test('unverified user cannot log in (generic failure, no account leak)', async () => {
   const response = await request('/api/auth/login', {
     method: 'POST',
