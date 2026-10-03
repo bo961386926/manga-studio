@@ -41,10 +41,19 @@ const blobToBase64 = (blob: Blob): Promise<string> => {
  *
  * The server-side /api/ai-forward route has been REMOVED (stage-3 gate):
  * production code no longer accepts arbitrary target URLs, upstream headers
- * or client credentials. This function now always fails with a clear message;
- * legacy vendor calls must migrate to gateway-managed models
- * (services/modelGatewayClient). Gateway models never use this path.
+ * or client credentials. This function now always fails; legacy vendor calls
+ * must migrate to gateway-managed models (services/modelGatewayClient).
+ * Gateway models never use this path.
+ *
+ * 这条错误会一路冒泡到界面上用户看到的那行红字（StageScript/StageAssets/
+ * StageDirector 的 catch 都直接展示 err.message），所以必须是**可执行的指引**：
+ * 告诉用户去哪里配置，而不是甩出 "legacy forward proxy removed" 这种内部黑话。
  */
-export const proxyFetch = async (_targetUrl: string, _options?: RequestInit): Promise<Response> => {
-  throw new Error('legacy forward proxy removed: migrate this model to the self-hosted gateway');
+export const proxyFetch = async (targetUrl: string, _options?: RequestInit): Promise<Response> => {
+  const detail = `legacy forward proxy removed: ${targetUrl} must migrate to the self-hosted gateway`;
+  console.warn(`[apiClient] ${detail}`);
+  throw new Error(
+    '当前模型未接入服务端网关，无法调用。请到「模型配置 → 网关」添加服务商与模型后重试；' +
+      '若账号没有配置权限，请联系管理员完成模型配置（或运行迁移向导导入本地配置）。'
+  );
 };
