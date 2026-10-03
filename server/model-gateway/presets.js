@@ -363,5 +363,19 @@ export const VIDEO_ASYNC_PRESETS = {
   'minimax-video-async': MinimaxVideoAsync,
 };
 
+// ===== TTS（配音）：OpenAI 兼容 /audio/speech，二进制音频响应 =====
+export const buildTtsRequest = ({ apiModel, text, voice, speed, responseFormat = 'mp3' }) => {
+  const jsonBody = { model: apiModel, input: text, response_format: responseFormat };
+  if (voice) jsonBody.voice = voice;
+  if (typeof speed === 'number' && speed !== 1) jsonBody.speed = speed;
+  return { jsonBody, extraHeaders: {} };
+};
+
+export const parseTtsResponse = (rawBuffer, contentType) => {
+  const buffer = Buffer.isBuffer(rawBuffer) ? rawBuffer : Buffer.from(rawBuffer || '');
+  if (!buffer.length) throw new ProtocolError('tts response empty audio body');
+  return { buffer, contentType: contentType || 'audio/mpeg' };
+};
+
 export const resolveVideoAsyncPreset = (protocolPreset) =>
   VIDEO_ASYNC_PRESETS[protocolPreset] || OpenAIVideoAsync;
