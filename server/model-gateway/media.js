@@ -16,6 +16,11 @@ const ALLOWED_CONTENT_TYPES = [
   'video/mp4',
   'video/webm',
   'video/quicktime',
+  'audio/mpeg',
+  'audio/wav',
+  'audio/x-wav',
+  'audio/mp4',
+  'audio/ogg',
 ];
 
 const storageRoot = () => process.env.MEDIA_STORAGE_DIR || path.join(process.cwd(), 'media-store');

@@ -15,6 +15,7 @@ import {
   parseVideoCreateResponse,
   resolveVideoAsyncPreset,
   resolveImageAsyncPreset,
+  buildTtsRequest, parseTtsResponse,
 } from '../model-gateway/presets.js';
 import { ensureMediaRef, getMediaContent, deleteMedia, toMediaRef } from '../model-gateway/media.js';
 import { fetchUpstream } from '../model-gateway/upstream.js';
@@ -543,6 +544,28 @@ modelGatewayRouter.post(
           uploadResult: async ({ client, invocationId, upstreamResult }) => {
             await storeTextResult(client, { invocationId, text: upstreamResult });
             return { schemaVersion: 1, kind: 'chat', content: upstreamResult, responseFormat: params.responseFormat || 'text' };
+          },
+          deps: { fetchUpstream: caller.call },
+        });
+        await audit(req, { eventType: 'model.invoke', result: 'success', metadata: { detail: operation } });
+        return res.json({ ...result, creditsRemaining: await getBalance(req.user.user_id) });
+      }
+
+      // TTS 配音：OpenAI 兼容 /audio/speech，二进制音频入库为媒体资产。
+      if (operation === 'tts' && model.capability === 'tts') {
+        assertPrompt(params.prompt);
+        const payload = { prompt: params.prompt, voice: params.voice, speed: params.speed };
+        const result = await invokeSync({
+          userId: req.user.user_id, isAdmin, model, provider: model.provider,
+          operation: 'tts', idempotencyKey, payload,
+          buildRequest: ({ payload: p }) => buildTtsRequest({
+            apiModel: model.api_model, text: p.prompt, voice: p.voice, speed: p.speed,
+          }),
+          parseResponse: ({ rawBuffer, contentType }) => parseTtsResponse(rawBuffer, contentType),
+          uploadResult: async ({ client, userId, invocationId, upstreamResult }) => {
+            const record = await storeSyncMedia({ userId, upstreamResult, deps: caller });
+            await storeMediaResult(client, { invocationId, record });
+            return { schemaVersion: 1, kind: 'asset', assetId: record.id, contentType: record.content_type, sizeBytes: Number(record.size_bytes) };
           },
           deps: { fetchUpstream: caller.call },
         });
