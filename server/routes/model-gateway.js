@@ -14,6 +14,7 @@ import {
   buildImageRequest, parseImageResponse,
   parseVideoCreateResponse,
   resolveVideoAsyncPreset,
+  resolveImageAsyncPreset,
 } from '../model-gateway/presets.js';
 import { ensureMediaRef, getMediaContent, deleteMedia, toMediaRef } from '../model-gateway/media.js';
 import { fetchUpstream } from '../model-gateway/upstream.js';
@@ -554,6 +555,38 @@ modelGatewayRouter.post(
         assertAspectRatio(params.aspectRatio);
         assertReferenceCount(params.referenceAssetIds, 16, 'referenceAssetIds');
         const payload = { prompt: params.prompt, aspectRatio: params.aspectRatio, referenceAssetIds: params.referenceAssetIds };
+        // 厂商专用异步图生图（如百炼万相 i2i）：走 model_jobs 轮询管线。
+        const imageAsyncPreset = resolveImageAsyncPreset(model.protocol_preset);
+        if (imageAsyncPreset) {
+          const baseAssetId = (params.referenceAssetIds || [])[0];
+          const baseImageDataUrl = baseAssetId
+            ? await getMediaContent(req.user.user_id, baseAssetId).then(
+                ({ buffer, contentType }) => `data:${contentType};base64,${buffer.toString('base64')}`
+              )
+            : undefined;
+          const result = await createAsyncJob({
+            userId: req.user.user_id, isAdmin, model, provider: model.provider,
+            idempotencyKey, payload,
+            deps: {
+              fetchUpstream: async (callParams) => {
+                const built = imageAsyncPreset.buildCreateRequest({
+                  apiModel: model.api_model,
+                  prompt: callParams.payload.prompt,
+                  size: sizeForAspect(callParams.payload.aspectRatio),
+                  baseImageDataUrl,
+                });
+                return caller.call({
+                  path: imageAsyncPreset.createPath(model.protocol_config, model),
+                  jsonBody: built.jsonBody,
+                  extraHeaders: built.extraHeaders,
+                  parseResponse: ({ body }) => imageAsyncPreset.parseCreateResponse(body),
+                });
+              },
+            },
+          });
+          await audit(req, { eventType: 'model.invoke', result: 'success', metadata: { detail: operation } });
+          return res.status(202).json({ ...result, creditsRemaining: await getBalance(req.user.user_id) });
+        }
         // 参考图 → multipart edit 请求的 image 部分（图生图）。此前这里校验完就把
         // referenceAssetIds 丢掉了，图生图被静默降级成文生图。
         const referenceImages = await Promise.all(
@@ -684,7 +717,9 @@ const POLLABLE_JOB_STATUSES = new Set(['queued', 'polling']);
 // protocol_config stay current. Testable: pass a mock transport through
 // callerDeps (buildUpstreamCaller's deps.fetchUpstream shape).
 export const buildJobPollDeps = ({ model, callerDeps } = {}) => {
-  const videoPreset = resolveVideoAsyncPreset(model.protocol_preset);
+  // 轮询预设按协议分发：image 异步协议（万相 i2i 等）优先，否则回退视频异步。
+  const videoPreset = resolveImageAsyncPreset(model.protocol_preset)
+    || resolveVideoAsyncPreset(model.protocol_preset);
   const caller = buildUpstreamCaller({ model, provider: model.provider, deps: callerDeps });
   return {
     fetchJobStatus: async ({ taskId }) => {
@@ -708,7 +743,7 @@ export const buildJobPollDeps = ({ model, callerDeps } = {}) => {
         timeoutMs: 300000,
       });
       if (res.status < 200 || res.status >= 300) throw new Error(`download upstream ${res.status}`);
-      return { buffer: res.body, contentType: res.headers['content-type'] || 'video/mp4' };
+      return { buffer: res.body, contentType: res.headers['content-type'] || (model.capability === 'image' ? 'image/png' : 'video/mp4') };
     },
   };
 };

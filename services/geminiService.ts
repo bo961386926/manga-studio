@@ -188,6 +188,22 @@ const tryGatewayImage = async (
     { prompt: finalPrompt, aspectRatio, ...(referenceAssetIds.length ? { referenceAssetIds } : {}) },
     makeIdempotencyKey('image')
   );
+  // 厂商异步图生图（如百炼万相 i2i）返回 202 + jobId → 轮询等待。
+  const accepted: any = result;
+  if (accepted?.jobId) {
+    console.log(`[Gateway] 图片任务已创建: ${accepted.jobId}`);
+    const deadline = Date.now() + 5 * 60 * 1000;
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 3000));
+      const job = await getJob(accepted.jobId);
+      if (job?.status === 'succeeded' && job.resultAssetId) {
+        return await fetchAssetAsDataUrl(job.resultAssetId);
+      }
+      if (job?.status === 'failed') throw new Error(job.errorMessage || '图片生成失败');
+      if (job?.status === 'cancelled' || job?.status === 'expired') throw new Error('图片任务已结束');
+    }
+    throw new Error('图片生成超时 (5分钟)');
+  }
   if (result?.kind !== 'asset') throw new Error('网关图片调用未返回图片资产');
   return await fetchAssetAsDataUrl(result.assetId);
 };
