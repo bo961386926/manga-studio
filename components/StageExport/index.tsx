@@ -4,6 +4,7 @@ import { Film } from 'lucide-react';
 import { ProjectState } from '../../types';
 import { downloadMasterVideo, downloadSourceAssets } from '../../services/exportService';
 import { mergeShotsToSingleMp4 } from '../../services/videoMerger';
+import { invokeTts, listModels, makeIdempotencyKey } from '../../services/modelGatewayClient';
 import { buildSubtitleCues, cuesToSrt } from '../../services/subtitleService';
 import { STYLES } from './constants';
 import {
@@ -46,6 +47,8 @@ const StageExport: React.FC<Props> = ({ project }) => {
   // 字幕：默认烧录台词；没有台词的项目可切到「动作描述」
   const [burnSubtitles, setBurnSubtitles] = useState(true);
   const [subtitleSource, setSubtitleSource] = useState<'dialogue' | 'action'>('dialogue');
+  const [dubNarration, setDubNarration] = useState(false);
+  const [bgmFile, setBgmFile] = useState<File | null>(null);
 
   const [showLogsModal, setShowLogsModal] = useState(false);
   const [expandedLogId, setExpandedLogId] = useState<string | null>(null);
@@ -156,6 +159,26 @@ const StageExport: React.FC<Props> = ({ project }) => {
     setIsMerging(true);
     setMergeProgress(0);
     try {
+      // ② 配音：逐镜头 TTS（仅含台词镜头，按顺序 concat）；BGM 上传文件
+      const mergeOptions: Record<string, unknown> = {};
+      if (burnSubtitles) mergeOptions.subtitleCues = currentSubtitleCues;
+      if (dubNarration) {
+        const models = await listModels();
+        const ttsModel = models.find(m => m.capability === 'tts');
+        if (!ttsModel) throw new Error('未找到 TTS 配音模型，请先在「模型网关」配置 tts 能力模型');
+        const narrationData: Uint8Array[] = [];
+        const narrShots = completedShots.filter(s => (s.dialogue || '').trim());
+        for (let i = 0; i < narrShots.length; i++) {
+          setMergePhase(`配音 ${i + 1}/${narrShots.length}...`);
+          setMergeProgress(Math.round(((i + 1) / narrShots.length) * 15));
+          const r = await invokeTts(ttsModel.id, { prompt: narrShots[i].dialogue.trim() }, makeIdempotencyKey('tts'));
+          const res = await fetch(`/api/model-invocations/media-assets/${r.assetId}/content`);
+          if (!res.ok) throw new Error(`配音音频下载失败: HTTP ${res.status}`);
+          narrationData.push(new Uint8Array(await res.arrayBuffer()));
+        }
+        mergeOptions.narrationData = narrationData;
+      }
+      if (bgmFile) mergeOptions.bgmData = new Uint8Array(await bgmFile.arrayBuffer());
       await mergeShotsToSingleMp4(
         project.shots,
         project.scriptData?.title || project.title,
@@ -163,7 +186,7 @@ const StageExport: React.FC<Props> = ({ project }) => {
           setMergePhase(phase);
           setMergeProgress(prog);
         },
-        burnSubtitles ? { subtitleCues: currentSubtitleCues } : undefined
+        Object.keys(mergeOptions).length ? mergeOptions : undefined
       );
       setTimeout(() => {
         setIsMerging(false);
@@ -306,6 +329,25 @@ const StageExport: React.FC<Props> = ({ project }) => {
                           : '（镜头没有台词，可改用动作描述）'
                         : `（${actionShotCount} 条动作描述）`}
                     </span>
+                  </label>
+                  <label className="flex items-center gap-1.5 text-xs text-zinc-300 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={dubNarration}
+                      onChange={(e) => setDubNarration(e.target.checked)}
+                      className="accent-cyan-400 w-3.5 h-3.5"
+                    />
+                    AI 配音（TTS）
+                    <span className="text-zinc-500">（按台词镜头顺序拼接）</span>
+                  </label>
+                  <label className="flex items-center gap-1.5 text-xs text-zinc-300 cursor-pointer">
+                    <input
+                      type="file"
+                      accept="audio/*"
+                      onChange={(e) => setBgmFile(e.target.files?.[0] ?? null)}
+                      className="text-[10px] text-zinc-400 file:mr-1 file:px-1.5 file:py-0.5 file:rounded file:border-0 file:bg-zinc-700 file:text-zinc-200"
+                    />
+                    BGM
                   </label>
                   <div className="flex items-center gap-2">
                     <select

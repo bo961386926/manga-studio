@@ -83,7 +83,7 @@ export interface ModelDTO {
   id: string;
   name: string;
   apiModel: string;
-  capability: 'chat' | 'image' | 'video';
+  capability: 'chat' | 'image' | 'video' | 'tts';
   adapterKind: string;
   protocolPreset?: string | null;
   endpointPath: string;
@@ -123,7 +123,7 @@ export interface ProviderPresetDTO {
       }
     >
   >;
-  suggestedModels: Array<{ apiModel: string; name: string; capability: 'chat' | 'image' | 'video' }>;
+  suggestedModels: Array<{ apiModel: string; name: string; capability: 'chat' | 'image' | 'video' | 'tts' }>;
 }
 
 export interface GatewayApiError extends Error {
