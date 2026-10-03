@@ -315,6 +315,47 @@ const OpenAIVideoAsync = {
   extractError: extractVideoError,
 };
 
+// 万相 i2i (DashScope image2image): same async task family as video —
+// 202 {output.task_id} → GET /v1/tasks/{task_id} → output.results[0].url.
+const DashscopeImageAsync = {
+  key: 'dashscope-image-async',
+  createPath: (protocolConfig) =>
+    protocolConfig?.createEndpoint || '/v1/services/aigc/image2image/image-synthesis',
+  buildCreateRequest: ({ apiModel, prompt, size, baseImageDataUrl }) => {
+    const input = { prompt };
+    if (baseImageDataUrl) input.base_image_url = baseImageDataUrl;
+    const jsonBody = { model: apiModel, input };
+    if (size) jsonBody.parameters = { size };
+    return { jsonBody, extraHeaders: { 'X-DashScope-Async': 'enable' } };
+  },
+  parseCreateResponse: (body) => {
+    const taskId = body?.output?.task_id || body?.task_id;
+    if (typeof taskId !== 'string' || !taskId) throw new ProtocolError('dashscope image create response missing output.task_id');
+    return { taskId };
+  },
+  statusPath: (taskId) => `/v1/tasks/${taskId}`,
+  classifyStatus: (body) => {
+    const status = statusOf(body?.output?.task_status, body?.status);
+    if (['succeeded', 'completed'].includes(status)) return 'success';
+    if (['failed', 'error', 'canceled', 'cancelled', 'unknown'].includes(status)) return 'failure';
+    return 'waiting';
+  },
+  extractResult: (body) => {
+    const url = body?.output?.results?.[0]?.url;
+    if (typeof url !== 'string' || !url) throw new ProtocolError('dashscope image result missing output.results[0].url');
+    return { resourceId: url };
+  },
+  extractError: (body) =>
+    body?.output?.message || body?.message || 'dashscope image generation failed',
+};
+
+export const IMAGE_ASYNC_PRESETS = {
+  'dashscope-image-async': DashscopeImageAsync,
+};
+
+// undefined = protocol has no dedicated async image flow → keep sync invoke.
+export const resolveImageAsyncPreset = (protocolPreset) => IMAGE_ASYNC_PRESETS[protocolPreset];
+
 export const VIDEO_ASYNC_PRESETS = {
   'openai-video-async': OpenAIVideoAsync,
   'ark-video-async': ArkVideoAsync,
