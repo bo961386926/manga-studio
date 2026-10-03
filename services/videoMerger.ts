@@ -2,6 +2,8 @@
 import { FFmpeg } from '@ffmpeg/ffmpeg';
 import { fetchFile, toBlobURL } from '@ffmpeg/util';
 import type { Shot } from '../types';
+import type { SubtitleCue } from './subtitleService';
+import { probeVideoWidth, renderCuePng } from './subtitleCanvas';
 
 let ffmpegInstance: FFmpeg | null = null;
 // 模块级进度回调，避免重复注册 listener 导致回调累积
@@ -24,18 +26,82 @@ async function loadFfmpeg(onProgress?: (phase: string, progress: number) => void
   return ffmpeg;
 }
 
+// ---------- 字幕烧录（overlay 方案） ----------
+// ffmpeg.wasm core 没有 CJK 字体，libass/drawtext 烧中文会变方框，
+// 因此字幕先用 canvas 渲染成透明底 PNG（services/subtitleCanvas.ts），
+// 这里按时间窗 enable 叠加到画面上。纯函数部分可单测。
+
+export interface SubtitleOverlay {
+  file: string;
+  startSeconds: number;
+  endSeconds: number;
+}
+
+// between(t,…) 里的秒数：最多 3 位小数并去掉尾零（0 → '0'，3.5 → '3.5'）
+const fmtEnableSeconds = (n: number): string => String(Math.round(n * 1000) / 1000);
+
+/** 字幕叠加计划：每条 cue 一个 PNG 文件与时间窗 */
+export const buildSubtitleOverlayPlan = (cues: SubtitleCue[]): SubtitleOverlay[] =>
+  cues.map((c, i) => ({
+    file: `sub_${String(i + 1).padStart(3, '0')}.png`,
+    startSeconds: c.startSeconds,
+    endSeconds: c.endSeconds,
+  }));
+
+/** 烧录字幕的 ffmpeg 参数：concat + 逐条 overlay(enable 时间窗) + 重编码 */
+export const buildSubtitleMergeArgs = (options: {
+  listFile: string;
+  outputName: string;
+  overlays: SubtitleOverlay[];
+}): string[] => {
+  const { listFile, outputName, overlays } = options;
+  if (overlays.length === 0) {
+    throw new Error('字幕叠加计划为空');
+  }
+  const inputs = overlays.flatMap(o => ['-i', o.file]);
+  const chain = overlays
+    .map((o, i) => {
+      const main = i === 0 ? '[0:v]' : `[v${i - 1}]`;
+      const out = i === overlays.length - 1 ? '[vout]' : `[v${i}]`;
+      const enable = `enable='between(t,${fmtEnableSeconds(o.startSeconds)},${fmtEnableSeconds(o.endSeconds)})'`;
+      return `${main}[${i + 1}:v]overlay=(W-w)/2:H-h-48:${enable}${out}`;
+    })
+    .join(';');
+  return [
+    '-f', 'concat', '-safe', '0',
+    '-i', listFile,
+    ...inputs,
+    '-filter_complex', chain,
+    '-map', '[vout]',
+    '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
+    '-c:a', 'aac',
+    outputName,
+  ];
+};
+
+export interface MergeOptions {
+  /** 需要烧录的字幕（非空时走 overlay 合成路径） */
+  subtitleCues?: SubtitleCue[];
+  /** 测试/特殊场景可注入的自定义渲染器；缺省用 canvas 渲染 */
+  renderCuePng?: (cue: SubtitleCue) => Promise<Uint8Array>;
+}
+
 /**
- * 把已渲染的视频片段合并为单个 MP4 并下载
+ * 把已渲染的视频片段合并为单个 MP4 并下载；可选烧录字幕
  */
 export async function mergeShotsToSingleMp4(
   shots: Shot[],
   outputName: string,
-  onProgress?: (phase: string, progress: number) => void
+  onProgress?: (phase: string, progress: number) => void,
+  options?: MergeOptions
 ): Promise<void> {
   const completed = shots.filter(s => s.interval?.videoUrl);
   if (completed.length === 0) {
     throw new Error('没有可合并的视频片段');
   }
+  const subtitleCues = options?.subtitleCues ?? [];
+  const burnSubtitles = subtitleCues.length > 0;
+  const pngFiles: string[] = [];
 
   const ffmpeg = await loadFfmpeg(onProgress);
 
@@ -58,43 +124,78 @@ export async function mergeShotsToSingleMp4(
   const listContent = files.map(f => `file '${f}'`).join('\n');
   await ffmpeg.writeFile('concat_list.txt', new TextEncoder().encode(listContent));
 
-  // 3. 先尝试 stream copy（快），失败/为空则重编码（慢但兼容不同来源）
-  let merged = false;
-  progressHandler = (p) => {
-    onProgress?.('正在合并视频...', Math.min(82, 20 + Math.round(p * 62)));
-  };
-
-  try {
-    onProgress?.('正在合并（快速模式）...', 22);
-    const exitCode = await ffmpeg.exec([
-      '-f', 'concat', '-safe', '0',
-      '-i', 'concat_list.txt',
-      '-c', 'copy',
-      'output.mp4'
-    ]);
-    if (exitCode === 0) {
-      const out = await ffmpeg.readFile('output.mp4') as Uint8Array;
-      if (out.length > 0) merged = true;
+  if (burnSubtitles) {
+    // 3a. 烧录字幕路径：滤镜必须重编码，先渲染字幕 PNG，再 overlay 合成
+    onProgress?.('正在渲染字幕图片...', 18);
+    const overlays = buildSubtitleOverlayPlan(subtitleCues);
+    let draw = options?.renderCuePng;
+    if (!draw) {
+      const videoWidth = await probeVideoWidth(completed[0].interval!.videoUrl!);
+      draw = (cue) => renderCuePng(cue, videoWidth);
     }
-  } catch (e) {
-    console.warn('[videoMerger] 快速合并失败，将重编码:', e);
-  }
+    for (let i = 0; i < overlays.length; i++) {
+      const png = await draw(subtitleCues[i]);
+      await ffmpeg.writeFile(overlays[i].file, png);
+      pngFiles.push(overlays[i].file);
+      onProgress?.(
+        `正在渲染字幕 ${i + 1}/${overlays.length}...`,
+        18 + Math.round(((i + 1) / overlays.length) * 4)
+      );
+    }
 
-  if (!merged) {
-    onProgress?.('片段编码不一致，正在重新编码（较慢）...', 20);
     progressHandler = (p) => {
-      onProgress?.('正在重新编码...', Math.min(82, 20 + Math.round(p * 62)));
+      onProgress?.('正在烧录字幕并编码（较慢）...', Math.min(82, 22 + Math.round(p * 60)));
     };
-    await ffmpeg.exec([
-      '-f', 'concat', '-safe', '0',
-      '-i', 'concat_list.txt',
-      '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
-      '-c:a', 'aac',
-      'output.mp4'
-    ]);
-  }
+    onProgress?.('正在烧录字幕并编码（较慢）...', 22);
+    const args = buildSubtitleMergeArgs({
+      listFile: 'concat_list.txt',
+      outputName: 'output.mp4',
+      overlays,
+    });
+    const exitCode = await ffmpeg.exec(args);
+    progressHandler = null;
+    if (exitCode !== 0) {
+      throw new Error('字幕合成失败（ffmpeg 返回非零退出码）');
+    }
+  } else {
+    // 3b. 无字幕：先尝试 stream copy（快），失败/为空则重编码（慢但兼容不同来源）
+    let merged = false;
+    progressHandler = (p) => {
+      onProgress?.('正在合并视频...', Math.min(82, 20 + Math.round(p * 62)));
+    };
 
-  progressHandler = null;
+    try {
+      onProgress?.('正在合并（快速模式）...', 22);
+      const exitCode = await ffmpeg.exec([
+        '-f', 'concat', '-safe', '0',
+        '-i', 'concat_list.txt',
+        '-c', 'copy',
+        'output.mp4'
+      ]);
+      if (exitCode === 0) {
+        const out = await ffmpeg.readFile('output.mp4') as Uint8Array;
+        if (out.length > 0) merged = true;
+      }
+    } catch (e) {
+      console.warn('[videoMerger] 快速合并失败，将重编码:', e);
+    }
+
+    if (!merged) {
+      onProgress?.('片段编码不一致，正在重新编码（较慢）...', 20);
+      progressHandler = (p) => {
+        onProgress?.('正在重新编码...', Math.min(82, 20 + Math.round(p * 62)));
+      };
+      await ffmpeg.exec([
+        '-f', 'concat', '-safe', '0',
+        '-i', 'concat_list.txt',
+        '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
+        '-c:a', 'aac',
+        'output.mp4'
+      ]);
+    }
+
+    progressHandler = null;
+  }
 
   // 4. 读取并下载
   onProgress?.('正在生成文件...', 90);
@@ -111,6 +212,9 @@ export async function mergeShotsToSingleMp4(
 
   // 5. 清理虚拟文件系统
   for (const f of files) {
+    try { await ffmpeg.deleteFile(f); } catch (_) { /* ignore */ }
+  }
+  for (const f of pngFiles) {
     try { await ffmpeg.deleteFile(f); } catch (_) { /* ignore */ }
   }
   try { await ffmpeg.deleteFile('concat_list.txt'); } catch (_) { /* ignore */ }
