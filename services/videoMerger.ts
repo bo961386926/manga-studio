@@ -102,6 +102,10 @@ export interface MergeOptions {
   bgmPath?: string;
   /** BGM 音量（默认 0.25） */
   bgmVolume?: number;
+  /** 旁白音频二进制（mp3，按镜头顺序；执行层写入虚拟 FS） */
+  narrationData?: Uint8Array[];
+  /** BGM 音频二进制（mp3，执行层写入虚拟 FS） */
+  bgmData?: Uint8Array;
 }
 
 /**
@@ -142,6 +146,20 @@ export async function mergeShotsToSingleMp4(
   const listContent = files.map(f => `file '${f}'`).join('\n');
   await ffmpeg.writeFile('concat_list.txt', new TextEncoder().encode(listContent));
 
+  // 2b. ② 音频：旁白/BGM 写入虚拟 FS，构建混音计划
+  const narrationPaths: string[] = [];
+  for (let i = 0; i < (options?.narrationData?.length ?? 0); i++) {
+    const name = `narr_${String(i + 1).padStart(3, '0')}.mp3`;
+    await ffmpeg.writeFile(name, options!.narrationData![i]);
+    narrationPaths.push(name);
+  }
+  let bgmPath: string | undefined;
+  if (options?.bgmData) {
+    await ffmpeg.writeFile('bgm_track.mp3', options.bgmData);
+    bgmPath = 'bgm_track.mp3';
+  }
+  const audioMix = buildAudioMixPlan({ narrationPaths, bgmPath, bgmVolume: options?.bgmVolume });
+
   if (burnSubtitles) {
     // 3a. 烧录字幕路径：滤镜必须重编码，先渲染字幕 PNG，再 overlay 合成
     onProgress?.('正在渲染字幕图片...', 18);
@@ -169,6 +187,7 @@ export async function mergeShotsToSingleMp4(
       listFile: 'concat_list.txt',
       outputName: 'output.mp4',
       overlays,
+      audioMix,
     });
     const exitCode = await ffmpeg.exec(args);
     progressHandler = null;
@@ -183,29 +202,33 @@ export async function mergeShotsToSingleMp4(
     };
 
     try {
-      onProgress?.('正在合并（快速模式）...', 22);
-      const exitCode = await ffmpeg.exec([
-        '-f', 'concat', '-safe', '0',
-        '-i', 'concat_list.txt',
-        '-c', 'copy',
-        'output.mp4'
-      ]);
-      if (exitCode === 0) {
-        const out = await ffmpeg.readFile('output.mp4') as Uint8Array;
-        if (out.length > 0) merged = true;
+      if (!audioMix) {
+        onProgress?.('正在合并（快速模式）...', 22);
+        const exitCode = await ffmpeg.exec([
+          '-f', 'concat', '-safe', '0',
+          '-i', 'concat_list.txt',
+          '-c', 'copy',
+          'output.mp4'
+        ]);
+        if (exitCode === 0) {
+          const out = await ffmpeg.readFile('output.mp4') as Uint8Array;
+          if (out.length > 0) merged = true;
+        }
       }
     } catch (e) {
       console.warn('[videoMerger] 快速合并失败，将重编码:', e);
     }
 
     if (!merged) {
-      onProgress?.('片段编码不一致，正在重新编码（较慢）...', 20);
+      onProgress?.(audioMix ? '正在混音并重编码（较慢）...' : '片段编码不一致，正在重新编码（较慢）...', 20);
       progressHandler = (p) => {
-        onProgress?.('正在重新编码...', Math.min(82, 20 + Math.round(p * 62)));
+        onProgress?.(audioMix ? '正在混音并重编码...' : '正在重新编码...', Math.min(82, 20 + Math.round(p * 62)));
       };
       await ffmpeg.exec([
         '-f', 'concat', '-safe', '0',
         '-i', 'concat_list.txt',
+        ...(audioMix ? audioMix.inputs : []),
+        ...(audioMix ? ['-filter_complex', audioMix.filter, '-map', '0:v', '-map', `[${audioMix.outLabel}]`] : []),
         '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
         '-c:a', 'aac',
         'output.mp4'
