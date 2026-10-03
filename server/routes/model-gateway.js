@@ -76,7 +76,9 @@ modelGatewayRouter.post(
       if (scope === 'shared' && req.user.role !== 'admin') {
         throw new PolicyError('ADMIN_ONLY', 'shared providers require admin', 403);
       }
-      if (scope === 'private') await requireVipOrThrow(req.user.user_id);
+      // 管理员豁免：管理员能创建影响所有用户的共享服务商，却因没有 VIP 而建不了
+      // 只属于自己的私有服务商，属于逻辑倒挂（用户实测踩到）。私有 = 普通用户需 VIP。
+      if (scope === 'private' && req.user.role !== 'admin') await requireVipOrThrow(req.user.user_id);
       const isAdmin = req.user.role === 'admin';
       const providerId = await withUserContext({ userId: req.user.user_id, isAdmin }, async (client) => {
         const { rows } = await client.query(

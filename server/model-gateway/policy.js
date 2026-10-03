@@ -32,8 +32,11 @@ export const assertModelAccess = async ({ model, provider, userId, isAdmin }) =>
     if (provider.owner_user_id !== userId) {
       throw new PolicyError('FORBIDDEN', 'not your model', 404);
     }
-    const ok = await canUseCapability({ userId, accessLevel: 'vip' });
-    if (!ok) throw new PolicyError('VIP_REQUIRED', 'vip entitlement required', 403);
+    // 与 provider 创建策略一致：管理员豁免 VIP，否则管理员能建却用不了自己的私有服务商
+    if (!isAdmin) {
+      const ok = await canUseCapability({ userId, accessLevel: 'vip' });
+      if (!ok) throw new PolicyError('VIP_REQUIRED', 'vip entitlement required', 403);
+    }
   } else if (provider.scope === 'shared') {
     if (model.access_level === 'admin' && !isAdmin) {
       throw new PolicyError('ADMIN_ONLY', 'admin access required', 403);
