@@ -222,3 +222,33 @@ export async function mergeShotsToSingleMp4(
 
   onProgress?.('完成！', 100);
 }
+
+// ===== ② 音频混音：旁白串联 + BGM 循环垫底（amix，duration=first 以旁白为准）=====
+export interface AudioMixPlan { inputs: string[]; filter: string; outLabel: string; }
+export const buildAudioMixPlan = (
+  { narrationPaths, bgmPath, bgmVolume = 0.25 }: { narrationPaths: string[]; bgmPath?: string; bgmVolume?: number }
+): AudioMixPlan | null => {
+  const hasNarration = narrationPaths.length > 0;
+  if (!hasNarration && !bgmPath) return null;
+  const inputs: string[] = [];
+  for (const p of narrationPaths) inputs.push('-i', p);
+  let bgmIndex = -1;
+  if (bgmPath) {
+    bgmIndex = narrationPaths.length;
+    inputs.push('-stream_loop', '-1', '-i', bgmPath);
+  }
+  const parts: string[] = [];
+  if (hasNarration) {
+    const narrIn = narrationPaths.map((_, i) => `[${i}:a]`).join('');
+    parts.push(`${narrIn}concat=n=${narrationPaths.length}:v=0:a=1[narr]`);
+  }
+  if (bgmIndex >= 0) parts.push(`[${bgmIndex}:a]volume=${bgmVolume}[bgm]`);
+  if (hasNarration && bgmIndex >= 0) {
+    parts.push(`[narr][bgm]amix=inputs=2:duration=first[aout]`);
+  } else if (hasNarration) {
+    parts.push(`[narr]anull[aout]`);
+  } else {
+    parts.push(`[bgm]anull[aout]`);
+  }
+  return { inputs, filter: parts.join(';'), outLabel: 'aout' };
+};
