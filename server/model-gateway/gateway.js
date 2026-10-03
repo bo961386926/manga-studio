@@ -143,7 +143,15 @@ export const invokeSync = async ({ userId, isAdmin, model, provider, operation, 
 
   let upstreamResult;
   try {
-    upstreamResult = await deps.fetchUpstream({ provider, model, operation, payload, buildRequest, parseResponse });
+    // buildRequest 的返回可能是裸 JSON body（chat）或 {kind, jsonBody|multipart}（image），
+    // 这里归一化成 upstream caller 的参数形状再下发。此前 buildRequest 的产物从未
+    // 传到 caller——同步调用一直是空 body POST（真 bug，被假 fetchUpstream 测试掩盖）。
+    const built = buildRequest({ payload });
+    const request =
+      built && (built.jsonBody !== undefined || built.multipart) ? built : { jsonBody: built };
+    upstreamResult = await deps.fetchUpstream({
+      provider, model, operation, payload, parseResponse, ...request,
+    });
   } catch (err) {
     await withUserContext({ userId, isAdmin }, async (client) => {
       await client.query(

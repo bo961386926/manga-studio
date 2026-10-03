@@ -17,6 +17,7 @@ import {
 } from '../model-gateway/presets.js';
 import { ensureMediaRef, getMediaContent, deleteMedia, toMediaRef } from '../model-gateway/media.js';
 import { fetchUpstream } from '../model-gateway/upstream.js';
+import { serializeFormData } from '../model-gateway/multipart.js';
 import { sealSecret, openSecret } from '../model-gateway/crypto.js';
 import { listProviderPresets } from '../model-gateway/provider-presets.js';
 import { discoverModels } from '../model-gateway/discovery.js';
@@ -469,13 +470,24 @@ export const buildUpstreamCaller = ({ model, provider, deps }) => {
     return { type: 'header', headerName: provider.auth_header_name, secret };
   };
   return {
-    call: async ({ path, method = 'POST', jsonBody, parseResponse, extraHeaders }) => {
+    call: async ({ path, method = 'POST', jsonBody, multipart, parseResponse, extraHeaders }) => {
+      let body;
+      const mergedHeaders = { ...(extraHeaders || {}) };
+      if (multipart) {
+        // multipart（图生图 edit）：序列化 FormData 并用其边界作为 Content-Type
+        const serialized = await serializeFormData(multipart);
+        body = serialized.buffer;
+        mergedHeaders['Content-Type'] = serialized.contentType;
+      } else {
+        mergedHeaders['Content-Type'] = 'application/json';
+        body = jsonBody !== undefined ? Buffer.from(JSON.stringify(jsonBody)) : undefined;
+      }
       const res = await (deps?.fetchUpstream || fetchUpstream)({
         url: urlFor(path),
         method,
-        headers: { 'Content-Type': 'application/json', ...(extraHeaders || {}) },
+        headers: mergedHeaders,
         upstreamAuth: buildAuth(),
-        body: jsonBody !== undefined ? Buffer.from(JSON.stringify(jsonBody)) : undefined,
+        body,
         maxBodyBytes: 50 * 1024 * 1024,
         timeoutMs: model.timeout_ms || provider.timeout_ms || 30000,
       });
@@ -485,9 +497,9 @@ export const buildUpstreamCaller = ({ model, provider, deps }) => {
       }
       const ct = res.headers['content-type'] || '';
       if (ct.includes('application/json')) {
-        return parseResponse(JSON.parse(res.body.toString('utf8')), ct, res.body);
+        return parseResponse({ body: JSON.parse(res.body.toString('utf8')), contentType: ct, rawBuffer: res.body });
       }
-      return parseResponse(null, ct, res.body);
+      return parseResponse({ body: null, contentType: ct, rawBuffer: res.body });
     },
   };
 };
@@ -509,7 +521,11 @@ modelGatewayRouter.post(
       // 每日配额护栏（管理员不受限）
       if (model) await assertDailyQuota({ userId: req.user.user_id, capability: model.capability, isAdmin });
 
-      const caller = buildUpstreamCaller({ model, provider: model.provider });
+      const caller = buildUpstreamCaller({
+        model,
+        provider: model.provider,
+        deps: { fetchUpstream: req.app?.locals?.modelGatewayDeps?.fetchUpstream },
+      });
       const preset = model.protocol_preset;
 
       if (operation === 'chat' && model.capability === 'chat') {
@@ -538,12 +554,21 @@ modelGatewayRouter.post(
         assertAspectRatio(params.aspectRatio);
         assertReferenceCount(params.referenceAssetIds, 16, 'referenceAssetIds');
         const payload = { prompt: params.prompt, aspectRatio: params.aspectRatio, referenceAssetIds: params.referenceAssetIds };
+        // 参考图 → multipart edit 请求的 image 部分（图生图）。此前这里校验完就把
+        // referenceAssetIds 丢掉了，图生图被静默降级成文生图。
+        const referenceImages = await Promise.all(
+          (params.referenceAssetIds || []).map(async (assetId) => {
+            const { buffer, contentType } = await getMediaContent(req.user.user_id, assetId);
+            return { buffer, contentType, name: assetId };
+          })
+        );
         const result = await invokeSync({
           userId: req.user.user_id, isAdmin, model, provider: model.provider,
           operation: 'image', idempotencyKey, payload,
           buildRequest: ({ payload: p }) => buildImageRequest({
             apiModel: model.api_model, prompt: p.prompt, size: sizeForAspect(p.aspectRatio),
             responseFormat: model.protocol_config?.responseFormat || 'b64_json',
+            referenceImages,
           }),
           parseResponse: ({ body, contentType, rawBuffer }) => parseImageResponse(body, contentType, rawBuffer),
           uploadResult: async ({ client, userId, invocationId, upstreamResult }) => {
@@ -621,15 +646,21 @@ const sizeForAspect = (aspectRatio) => {
 };
 
 // Store a sync media result (b64 or remote URL through hardened download).
+// 内容类型来自解析层（octet-stream 会被媒体白名单拒绝，也是同族 bug 之一）。
 const storeSyncMedia = async ({ userId, upstreamResult, deps }) => {
-  if (upstreamResult instanceof Buffer) {
+  if (upstreamResult instanceof Buffer || Buffer.isBuffer(upstreamResult.buffer)) {
     const { uploadMedia } = await import('../model-gateway/media.js');
-    return uploadMedia({ userId, buffer: upstreamResult, contentType: 'application/octet-stream', checksumSha256: '' });
+    return uploadMedia({
+      userId,
+      buffer: upstreamResult instanceof Buffer ? upstreamResult : upstreamResult.buffer,
+      contentType: (upstreamResult instanceof Buffer ? undefined : upstreamResult.contentType) || 'image/png',
+      checksumSha256: '',
+    });
   }
   if (upstreamResult.base64) {
     const { uploadMedia } = await import('../model-gateway/media.js');
     const buffer = Buffer.from(upstreamResult.base64, 'base64');
-    return uploadMedia({ userId, buffer, contentType: 'application/octet-stream', checksumSha256: '' });
+    return uploadMedia({ userId, buffer, contentType: upstreamResult.contentType || 'image/png', checksumSha256: '' });
   }
   if (upstreamResult.remoteUrl) {
     // Controlled download through the same SSRF-hardened path.
@@ -660,8 +691,8 @@ export const buildJobPollDeps = ({ model, callerDeps } = {}) => {
       const body = await caller.call({
         path: videoPreset.statusPath(taskId, model.protocol_config, model),
         method: 'GET',
-        // caller.call passes the parsed JSON body as the first argument.
-        parseResponse: (parsed) => parsed,
+        // caller.call 统一把解析结果以 { body, contentType, rawBuffer } 传入
+        parseResponse: ({ body }) => body,
       });
       const state = videoPreset.classifyStatus(body);
       if (state === 'success') return { state, resourceId: videoPreset.extractResult(body).resourceId };
@@ -699,7 +730,10 @@ modelGatewayRouter.get(
       try {
         const model = await loadModel({ userId: req.user.user_id, isAdmin, modelId: job.model_id_snapshot });
         if (model?.provider) {
-          const deps = buildJobPollDeps({ model });
+          const deps = buildJobPollDeps({
+            model,
+            callerDeps: { fetchUpstream: req.app?.locals?.modelGatewayDeps?.fetchUpstream },
+          });
           job = await pollJob({ userId: req.user.user_id, isAdmin, job, deps });
         }
       } catch (err) {

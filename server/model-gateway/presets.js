@@ -65,21 +65,23 @@ export const buildImageRequest = ({ apiModel, prompt, size, responseFormat, refe
     for (const img of referenceImages) {
       form.append('image', new Blob([img.buffer], { type: img.contentType }), `ref-${img.name || Date.now()}`);
     }
-    return { kind: 'multipart', body: form };
+    // multipart 键与 upstream caller 的参数形状对齐（kind/body 保留给既有断言）
+    return { kind: 'multipart', body: form, multipart: form };
   }
-  return {
-    kind: 'json',
-    body: { model: apiModel, prompt, size, n: 1, response_format: responseFormat },
-  };
+  const body = { model: apiModel, prompt, size, n: 1, response_format: responseFormat };
+  return { kind: 'json', body, jsonBody: body };
 };
 
 export const parseImageResponse = (body, contentType, rawBuffer) => {
-  if (contentType?.startsWith('image/')) return rawBuffer;
+  if (contentType?.startsWith('image/')) return { buffer: rawBuffer, contentType };
   const url = body?.data?.[0]?.b64_json
     ? null
     : body?.data?.[0]?.url || body?.output?.[0]?.url;
   if (typeof url === 'string') return { remoteUrl: url };
-  if (typeof body?.data?.[0]?.b64_json === 'string') return { base64: body.data[0].b64_json };
+  if (typeof body?.data?.[0]?.b64_json === 'string') {
+    // OpenAI 兼容 b64_json 不带图片类型，PNG 是事实标准；落库走白名单需要明确类型
+    return { base64: body.data[0].b64_json, contentType: 'image/png' };
+  }
   throw new ProtocolError('image response missing data/url');
 };
 
