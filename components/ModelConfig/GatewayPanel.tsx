@@ -76,7 +76,8 @@ const defaultParams = (capability: string): any => {
 /** 把网关策略错误码翻成用户能行动的中文（服务端只回英文 code）。 */
 const friendlyError = (e: any): string => {
   const code = e?.code || '';
-  if (code === 'VIP_REQUIRED') return '当前账号无法创建私有服务商（需要 VIP）；请联系管理员，或用管理员账号建共享服务商。';
+  if (code === 'VIP_REQUIRED') return '当前账号无法创建私有服务商（需要 VIP）。请前往左侧「兑换码」页面输入会员兑换码开通 VIP，或联系管理员开通后再试；也可直接使用管理员创建的共享服务商。';
+  if (code === 'QUOTA_EXCEEDED') return '今日免费调用额度已用完。可输入会员兑换码升级 VIP（更高每日额度），或明日再试；私有服务商调用不受此配额限制。';
   if (code === 'ADMIN_ONLY') return '共享服务商需要管理员权限，请改用私有，或联系管理员。';
   if (code === 'UPSTREAM_ERROR') return `调用服务商失败：${e?.message || ''}`;
   if (code === 'INVALID_PARAMS') return `参数不合法：${e?.message || ''}`;
