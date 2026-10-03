@@ -55,8 +55,10 @@ services:
       - REQUEST_HMAC_KEY=${REQUEST_HMAC_KEY:?REQUEST_HMAC_KEY must be set in .env}
       - EMAIL_DELIVERY_KEY=${EMAIL_DELIVERY_KEY:?EMAIL_DELIVERY_KEY must be set in .env}
       - IP_HMAC_SALT=${IP_HMAC_SALT:?IP_HMAC_SALT must be set in .env}
-      # 仅本地开发逃生阀：true 时注册直接激活（不发验证邮件）。生产 .env 保持 false！
+      # 仅本地开发逃生阀：EMAIL_VERIFICATION_DISABLED 跳过邮箱验证（重复注册＝改密码）；
+      # RATE_LIMIT_DISABLED 旁路限流。生产 .env 两者都必须保持 false！
       - EMAIL_VERIFICATION_DISABLED=${EMAIL_VERIFICATION_DISABLED:-false}
+      - RATE_LIMIT_DISABLED=${RATE_LIMIT_DISABLED:-false}
       - SMTP_HOST=${SMTP_HOST:-}
       - SMTP_PORT=${SMTP_PORT:-587}
       - SMTP_SECURE=${SMTP_SECURE:-false}

@@ -91,7 +91,22 @@ authRouter.post(
           skipEmailVerification ? new Date() : null,
         ]
       );
-      if (rows.length === 0) return; // already registered; never leak account existence
+      if (rows.length === 0) {
+        // 已注册：响应仍是 202（绝不泄漏账号是否存在）。本地开发开启逃生阀时，
+        // 把重复注册当作自助改密码——否则用户以为注册成功、实际旧密码才有效，
+        // 会陷入「刚注册就登录失败」的死循环。生产环境该分支保持纯无操作。
+        if (skipEmailVerification) {
+          await client.query(
+            `UPDATE users
+                SET password_hash = $2,
+                    status = 'active',
+                    email_verified_at = COALESCE(email_verified_at, now())
+              WHERE email_normalized = $1`,
+            [normalized, passwordHash]
+          );
+        }
+        return;
+      }
       createdUserId = rows[0].id;
       // 注册赠送积分（幂等，懒创建兜底由 credits 模块负责）
       await ensureCreditAccount(client, createdUserId);

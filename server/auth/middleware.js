@@ -104,6 +104,8 @@ export const rateLimit = ({ windowMs, max, keyFn = (req) => req.ip }) => {
   // IP keys let one limiter's counts overflow another's max.
   const id = ++limiterSeq;
   return (req, res, next) => {
+    // 本地开发逃生阀：RATE_LIMIT_DISABLED=true 时整体旁路（生产绝不设置）。
+    if (process.env.RATE_LIMIT_DISABLED === 'true') return next();
     const key = `${id}:${keyFn(req)}`;
     const now = Date.now();
     let bucket = buckets.get(key);
