@@ -36,11 +36,34 @@ test('预设表完整性：key 唯一、https 地址、能力协议在白名单�
   assert.ok(PROVIDER_PRESETS.length >= 6, '国内主流服务商至少 6 家');
 });
 
-test('预设表不包含任何密钥字段', () => {
-  const json = JSON.stringify(PROVIDER_PRESETS).toLowerCase();
-  for (const leak of ['apikey', 'api_key', 'secret', 'authorization', 'sk-']) {
-    assert.ok(!json.includes(leak), `preset table must not contain ${leak}`);
+test('每家预设都提供「获取 API Key」直达页与官方文档（https 链接）', () => {
+  for (const preset of PROVIDER_PRESETS) {
+    assert.match(preset.keyUrl, /^https:\/\//, `${preset.key} 需要 keyUrl`);
+    assert.match(preset.docsUrl, /^https:\/\//, `${preset.key} 需要 docsUrl`);
+    assert.notEqual(preset.keyUrl, preset.docsUrl, `${preset.key} 直达页与文档不应是同一地址`);
   }
+});
+
+test('预设表不包含任何凭据字段或密钥值', () => {
+  // 注意：keyUrl 里合法地含有 "apiKey" 字样（例如 ?apiKey=1），
+  // 因此这里校验的是**字段名**与**密钥值形状**，而不是无脑子串。
+  const collectKeys = (node, out = []) => {
+    if (Array.isArray(node)) node.forEach((x) => collectKeys(x, out));
+    else if (node && typeof node === 'object') {
+      for (const [k, v] of Object.entries(node)) {
+        out.push(k.toLowerCase());
+        collectKeys(v, out);
+      }
+    }
+    return out;
+  };
+  for (const field of collectKeys(PROVIDER_PRESETS)) {
+    assert.ok(
+      !/secret|credential|password|token|apikey|api_key/.test(field),
+      `预设表不得出现凭据字段: ${field}`
+    );
+  }
+  assert.ok(!JSON.stringify(PROVIDER_PRESETS).includes('sk-'), '预设表不得出现密钥值');
 });
 
 test('listProviderPresets 返回可安全下发到浏览器的字段', () => {
@@ -48,6 +71,7 @@ test('listProviderPresets 返回可安全下发到浏览器的字段', () => {
   assert.equal(list.length, PROVIDER_PRESETS.length);
   const first = list[0];
   assert.ok(first.key && first.name && first.baseUrl);
+  assert.ok(first.keyUrl && first.docsUrl, '下发字段需包含取 Key 链接与文档链接');
   assert.deepEqual(Object.keys(first.capabilities).length > 0, true);
 });
 

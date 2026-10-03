@@ -326,6 +326,24 @@ export default function GatewayPanel() {
               <span className="text-xs font-semibold text-slate-100">{selected.name}</span>
               <button className={btnGhost} onClick={() => { setSelected(null); setStep(1); }}>换一个</button>
             </div>
+            <div className="flex flex-wrap items-center gap-3 text-[11px]">
+              <a
+                className="text-cyan-300 hover:text-cyan-200 underline underline-offset-2 inline-flex items-center gap-1"
+                href={selected.keyUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                <KeyRound className="w-3 h-3" /> 还没有 Key？点这里去 {selected.name} 获取
+              </a>
+              <a
+                className="text-slate-400 hover:text-slate-300 underline underline-offset-2"
+                href={selected.docsUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                接入文档 ↗
+              </a>
+            </div>
             <div className="flex flex-wrap items-center gap-2">
               <input
                 className={`${inputCls} flex-1 min-w-[220px]`}

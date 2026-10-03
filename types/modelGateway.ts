@@ -105,6 +105,10 @@ export interface ProviderPresetDTO {
   baseUrl: string;
   authType: 'none' | 'bearer' | 'api-key-header';
   hint: string;
+  /** 官方控制台的 API Key 直达页（用户在向导里点这里去申请） */
+  keyUrl: string;
+  /** 官方接入文档 */
+  docsUrl: string;
   capabilities: Partial<
     Record<'chat' | 'image' | 'video', { protocolPreset: string; endpointPath: string; baseUrlOverride?: string }>
   >;

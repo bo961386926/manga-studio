@@ -84,10 +84,12 @@ test('登录后下发国内主流服务商预设，且不含任何凭据字段',
     }
   }
 
-  const raw = JSON.stringify(presets).toLowerCase();
-  for (const leak of ['apikey', 'api_key', '"secret', 'authorization', 'sk-']) {
-    assert.ok(!raw.includes(leak), `预设响应不得出现 ${leak}`);
-  }
+  // keyUrl 合法包含 "apiKey" 字样，这里只校验凭据字段与密钥值
+  const raw = JSON.stringify(presets);
+  assert.ok(!raw.includes('"secret"'), '预设响应不得出现 secret 字段');
+  assert.ok(!raw.includes('"credential"'), '预设响应不得出现 credential 字段');
+  assert.ok(!raw.includes('sk-'), '预设响应不得出现密钥值');
+  assert.ok(!raw.includes('Authorization'), '预设响应不得出现 Authorization');
 });
 
 test('对不存在的 provider 拉取模型 → 404', async () => {

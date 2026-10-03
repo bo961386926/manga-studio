@@ -17,6 +17,8 @@ export const PROVIDER_PRESETS = [
     baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
     authType: 'bearer',
     hint: '通义千问对话 / 通义万相图像 / 通义万相视频',
+    keyUrl: 'https://bailian.console.aliyun.com/?apiKey=1',
+    docsUrl: 'https://www.alibabacloud.com/help/zh/model-studio/get-api-key',
     capabilities: {
       chat: { protocolPreset: 'openai-chat', endpointPath: '/chat/completions' },
       image: { protocolPreset: 'openai-image', endpointPath: '/images/generations' },
@@ -37,6 +39,8 @@ export const PROVIDER_PRESETS = [
     baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
     authType: 'bearer',
     hint: '豆包对话 / 图像 / 视频；模型名可填接入点 ID（ep-…）或模型 ID',
+    keyUrl: 'https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey',
+    docsUrl: 'https://docs.volcengine.com/docs/ark/api-key',
     capabilities: {
       chat: { protocolPreset: 'openai-chat', endpointPath: '/chat/completions' },
       image: { protocolPreset: 'openai-image', endpointPath: '/images/generations' },
@@ -51,6 +55,8 @@ export const PROVIDER_PRESETS = [
     baseUrl: 'https://api.deepseek.com/v1',
     authType: 'bearer',
     hint: 'deepseek-chat / deepseek-reasoner',
+    keyUrl: 'https://platform.deepseek.com/api_keys',
+    docsUrl: 'https://api-docs.deepseek.com/',
     capabilities: {
       chat: { protocolPreset: 'openai-chat', endpointPath: '/chat/completions' },
     },
@@ -65,6 +71,8 @@ export const PROVIDER_PRESETS = [
     baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
     authType: 'bearer',
     hint: 'GLM 对话 / CogView 图像',
+    keyUrl: 'https://bigmodel.cn/usercenter/apikeys',
+    docsUrl: 'https://docs.bigmodel.cn/cn/guide/start/quick-start',
     capabilities: {
       chat: { protocolPreset: 'openai-chat', endpointPath: '/chat/completions' },
       image: { protocolPreset: 'openai-image', endpointPath: '/images/generations' },
@@ -77,6 +85,8 @@ export const PROVIDER_PRESETS = [
     baseUrl: 'https://api.moonshot.cn/v1',
     authType: 'bearer',
     hint: '长上下文对话',
+    keyUrl: 'https://platform.moonshot.cn/console/api-keys',
+    docsUrl: 'https://platform.moonshot.cn/docs/',
     capabilities: {
       chat: { protocolPreset: 'openai-chat', endpointPath: '/chat/completions' },
     },
@@ -88,6 +98,8 @@ export const PROVIDER_PRESETS = [
     baseUrl: 'https://api.minimaxi.com/v1',
     authType: 'bearer',
     hint: '对话 / 图像 / 视频（视频走 v2 根路径）',
+    keyUrl: 'https://platform.minimaxi.com/user-center/basic-information/interface-key',
+    docsUrl: 'https://platform.minimaxi.com/document/guides',
     capabilities: {
       chat: { protocolPreset: 'openai-chat', endpointPath: '/chat/completions' },
       image: { protocolPreset: 'openai-image', endpointPath: '/image_generation' },
@@ -109,6 +121,8 @@ export const PROVIDER_PRESETS = [
     baseUrl: 'https://api.siliconflow.cn/v1',
     authType: 'bearer',
     hint: '聚合开源模型（Qwen / DeepSeek / FLUX 等），模型列表建议拉取',
+    keyUrl: 'https://cloud.siliconflow.cn/account/ak',
+    docsUrl: 'https://docs.siliconflow.cn/',
     capabilities: {
       chat: { protocolPreset: 'openai-chat', endpointPath: '/chat/completions' },
       image: { protocolPreset: 'openai-image', endpointPath: '/images/generations' },
@@ -121,6 +135,8 @@ export const PROVIDER_PRESETS = [
     baseUrl: 'https://qianfan.baidubce.com/v2',
     authType: 'bearer',
     hint: '文心对话（v2 OpenAI 兼容），模型列表建议拉取',
+    keyUrl: 'https://console.bce.baidu.com/iam/#/iam/apikey/list',
+    docsUrl: 'https://cloud.baidu.com/doc/WENXINWORKSHOP/index.html',
     capabilities: {
       chat: { protocolPreset: 'openai-chat', endpointPath: '/chat/completions' },
       image: { protocolPreset: 'openai-image', endpointPath: '/images/generations' },
@@ -133,6 +149,8 @@ export const PROVIDER_PRESETS = [
     baseUrl: 'https://api.hunyuan.cloud.tencent.com/v1',
     authType: 'bearer',
     hint: '混元对话（OpenAI 兼容）',
+    keyUrl: 'https://console.cloud.tencent.com/hunyuan/api-key',
+    docsUrl: 'https://cloud.tencent.com/document/product/1729',
     capabilities: {
       chat: { protocolPreset: 'openai-chat', endpointPath: '/chat/completions' },
     },
@@ -146,6 +164,8 @@ const clonePreset = (p) => ({
   baseUrl: p.baseUrl,
   authType: p.authType,
   hint: p.hint || '',
+  keyUrl: p.keyUrl,
+  docsUrl: p.docsUrl,
   capabilities: Object.fromEntries(
     Object.entries(p.capabilities).map(([cap, spec]) => [cap, { ...spec }])
   ),
