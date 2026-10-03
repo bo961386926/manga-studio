@@ -185,3 +185,19 @@ export type { ProviderPresetDTO };
 export const deleteModel = async (modelId: string): Promise<void> => {
   await apiFetch(`/model-invocations/models/${modelId}`, { method: 'DELETE' });
 };
+
+// TTS 配音：OpenAI 兼容 /audio/speech，返回音频媒体资产。
+export interface TtsResultV1 { schemaVersion: 1; kind: 'asset'; assetId: string; contentType: string; sizeBytes: number; }
+export const invokeTts = async (
+  modelId: string,
+  params: { prompt: string; voice?: string; speed?: number },
+  idempotencyKey: string,
+  opts: InvokeOptions = {}
+): Promise<TtsResultV1> => {
+  return apiFetch(`/model-invocations/invocations`, {
+    method: 'POST',
+    signal: opts.signal,
+    headers: { 'Idempotency-Key': idempotencyKey },
+    body: JSON.stringify({ modelId, operation: 'tts', ...params }),
+  });
+};
