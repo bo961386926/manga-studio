@@ -95,6 +95,22 @@ export interface ModelDTO {
 
 export type ModelOperation = 'chat' | 'image' | 'video' | 'test';
 
+/**
+ * 服务商预设（服务端下发）：把 base URL / 协议预设 / 端点路径这些内部细节
+ * 固定下来，用户界面上只需「选服务商 → 填 API Key → 勾模型」。
+ */
+export interface ProviderPresetDTO {
+  key: string;
+  name: string;
+  baseUrl: string;
+  authType: 'none' | 'bearer' | 'api-key-header';
+  hint: string;
+  capabilities: Partial<
+    Record<'chat' | 'image' | 'video', { protocolPreset: string; endpointPath: string; baseUrlOverride?: string }>
+  >;
+  suggestedModels: Array<{ apiModel: string; name: string; capability: 'chat' | 'image' | 'video' }>;
+}
+
 export interface GatewayApiError extends Error {
   code?: string;
   status?: number;

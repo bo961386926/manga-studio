@@ -18,6 +18,8 @@ import {
 import { ensureMediaRef, getMediaContent, deleteMedia, toMediaRef } from '../model-gateway/media.js';
 import { fetchUpstream } from '../model-gateway/upstream.js';
 import { sealSecret, openSecret } from '../model-gateway/crypto.js';
+import { listProviderPresets } from '../model-gateway/provider-presets.js';
+import { discoverModels } from '../model-gateway/discovery.js';
 import { assertDailyQuota, getBalance } from '../credits.js';
 import { PRESETS } from '../model-gateway/presets.js';
 
@@ -153,6 +155,80 @@ modelGatewayRouter.post(
       });
       await audit(req, { eventType: 'provider.credential', result: 'success', metadata: { detail: 'set' } });
       res.json({ success: true, credentialConfigured: true });
+    } catch (err) {
+      if (err instanceof PolicyError) return res.status(err.status).json({ schemaVersion: 1, error: { code: err.code, message: err.message } });
+      throw err;
+    }
+  })
+);
+
+// ---------- 服务商预设（用户不手填地址/协议） ----------
+
+modelGatewayRouter.get(
+  '/provider-presets',
+  wrap(async (_req, res) => {
+    res.json({ schemaVersion: 1, presets: listProviderPresets() });
+  })
+);
+
+// 用已保存的凭据向服务商拉取可用模型列表（OpenAI 兼容 GET {base}/models）。
+// 凭据在服务端解密注入，浏览器不接触密钥；上游经 fetchUpstream（SSRF 绑定 + 超时）。
+modelGatewayRouter.post(
+  '/providers/:id/discover-models',
+  wrap(csrfProtection),
+  wrap(async (req, res) => {
+    try {
+      const isAdmin = req.user.role === 'admin';
+      const provider = await withUserContext({ userId: req.user.user_id, isAdmin }, async (client) => {
+        const { rows } = await client.query(
+          `SELECT p.id, p.owner_user_id, p.scope, p.base_url, p.auth_type, p.auth_header_name,
+                  cv.ciphertext, cv.iv, cv.tag, cv.encryption_key_id
+             FROM model_providers p
+             LEFT JOIN model_credential_versions cv ON cv.id = p.active_credential_version_id
+            WHERE p.id = $1 AND p.deleted_at IS NULL`,
+          [req.params.id]
+        );
+        return rows[0] || null;
+      });
+      const isOwner = provider && provider.scope === 'private' && provider.owner_user_id === req.user.user_id;
+      const isAdminShared = provider && provider.scope === 'shared' && req.user.role === 'admin';
+      if (!provider || (!isOwner && !isAdminShared)) {
+        throw new PolicyError('NOT_FOUND', 'provider not found', 404);
+      }
+
+      let secret = '';
+      if (provider.ciphertext) {
+        const ownerId = provider.owner_user_id || provider.id;
+        secret = openSecret(
+          {
+            ciphertext: provider.ciphertext,
+            iv: provider.iv,
+            tag: provider.tag,
+            keyId: provider.encryption_key_id,
+          },
+          { ownerId, recordId: provider.id, field: 'credential', keyId: provider.encryption_key_id }
+        );
+      }
+
+      let models;
+      try {
+        models = await discoverModels({
+          baseUrl: provider.base_url,
+          authType: provider.auth_type,
+          authHeaderName: provider.auth_header_name,
+          secret,
+          fetchUpstream: req.app?.locals?.modelGatewayDeps?.fetchUpstream || fetchUpstream,
+        });
+      } catch (e) {
+        throw new PolicyError('UPSTREAM_ERROR', e?.message || '模型列表拉取失败', 502);
+      }
+
+      await audit(req, {
+        eventType: 'provider.discover_models',
+        result: 'success',
+        metadata: { detail: String(models.length) },
+      });
+      res.json({ schemaVersion: 1, models });
     } catch (err) {
       if (err instanceof PolicyError) return res.status(err.status).json({ schemaVersion: 1, error: { code: err.code, message: err.message } });
       throw err;
@@ -372,33 +448,31 @@ const resolveUpstreamUrl = ({ model, provider, path }) => {
 // the secret never travels to the browser nor appears in invocation records.
 export const buildUpstreamCaller = ({ model, provider, deps }) => {
   const urlFor = (path) => resolveUpstreamUrl({ model, provider, path });
-  const buildHeaders = () => {
-    const headers = { 'Content-Type': 'application/json' };
+  // 凭据走独立注入通道（upstreamAuth），不能混进客户端 headers 袋子：
+  // fetchUpstream 会拒绝客户端自带的 authorization，仅放行服务端注入的凭据。
+  const buildAuth = () => {
     const authType = model.auth_override_type || provider.auth_type;
-    if (!authType || authType === 'none') return headers;
+    if (!authType || authType === 'none') return undefined;
     const credential = provider.credential;
     // No credential configured: call proceeds unauthenticated and surfaces
     // the upstream 401 as UPSTREAM_ERROR, mirroring "configured but empty".
-    if (!credential) return headers;
+    if (!credential) return undefined;
     const secret = openSecret(credential, {
       ownerId: credential.ownerId,
       recordId: provider.id,
       field: 'credential',
       keyId: credential.keyId,
     });
-    if (authType === 'bearer') {
-      headers['Authorization'] = `Bearer ${secret}`;
-    } else {
-      headers[provider.auth_header_name] = secret;
-    }
-    return headers;
+    if (authType === 'bearer') return { type: 'bearer', secret };
+    return { type: 'header', headerName: provider.auth_header_name, secret };
   };
   return {
     call: async ({ path, method = 'POST', jsonBody, parseResponse, extraHeaders }) => {
       const res = await (deps?.fetchUpstream || fetchUpstream)({
         url: urlFor(path),
         method,
-        headers: { ...buildHeaders(), ...(extraHeaders || {}) },
+        headers: { 'Content-Type': 'application/json', ...(extraHeaders || {}) },
+        upstreamAuth: buildAuth(),
         body: jsonBody !== undefined ? Buffer.from(JSON.stringify(jsonBody)) : undefined,
         maxBodyBytes: 50 * 1024 * 1024,
         timeoutMs: model.timeout_ms || provider.timeout_ms || 30000,

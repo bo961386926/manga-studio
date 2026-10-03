@@ -33,6 +33,19 @@ export const isForbiddenHeader = (name) => {
   return false;
 };
 
+// 服务端注入通道：authorization 是合法用途（网关注入解密后的凭据），
+// 其余连接语义头仍禁止——防止管理员配置的 auth_header_name 劫持 host/cookie。
+const INJECTABLE_FORBIDDEN_HEADER_NAMES = FORBIDDEN_HEADER_NAMES.filter((n) => n !== 'authorization');
+
+export const isForbiddenInjectedHeader = (name) => {
+  const lower = String(name || '').toLowerCase();
+  if (lower === 'authorization') return false;
+  if (INJECTABLE_FORBIDDEN_HEADER_NAMES.includes(lower)) return true;
+  if (lower.startsWith('x-forwarded-')) return true;
+  if (lower.startsWith('proxy-')) return true;
+  return false;
+};
+
 export const isPrivateAddress = (ip) => {
   const parts = ip.split('.').map(Number);
   if (parts.length === 4 && parts.every((n) => Number.isInteger(n) && n >= 0 && n <= 255)) {
@@ -117,12 +130,35 @@ const sendRequest = ({ url, ip, method, headers, body, timeoutMs, maxBodyBytes, 
   });
 
 // Reject client-supplied target URLs and dangerous headers before the wire.
-export const buildUpstreamRequest = ({ targetUrl, method = 'POST', headers = {}, body }) => {
+//
+// 凭据注入走独立通道 `upstreamAuth`：客户端提供的 headers 依旧严格校验
+// （Authorization/Cookie 等一律拒绝，防凭据走私），而**服务端解密后注入**的
+// 凭据必须放行——否则带 Key 的上游调用会被自己的守卫拦成 "forbidden header"。
+// 注入的 header 名仍不得劫持 host/cookie/proxy/forwarded 这类连接语义头。
+export const buildUpstreamRequest = ({ targetUrl, method = 'POST', headers = {}, body, upstreamAuth }) => {
   if (targetUrl) throw new Error('forbidden: client must not supply target URL');
   for (const name of Object.keys(headers)) {
     if (isForbiddenHeader(name)) throw new Error('forbidden header');
   }
-  return { method, headers, body };
+
+  const merged = { ...headers };
+  if (upstreamAuth) {
+    const { type, secret, headerName } = upstreamAuth;
+    if (!secret) throw new Error('upstream auth secret is required');
+    let name;
+    if (type === 'bearer') name = 'authorization';
+    else if (type === 'header') {
+      if (!headerName) throw new Error('upstream auth header name is required');
+      name = headerName;
+    } else {
+      throw new Error('unsupported upstream auth type');
+    }
+    if (isForbiddenInjectedHeader(name)) throw new Error('forbidden header');
+    merged[name.toLowerCase() === 'authorization' ? 'Authorization' : name] =
+      type === 'bearer' ? `Bearer ${secret}` : secret;
+  }
+
+  return { method, headers: merged, body };
 };
 
 export const fetchUpstream = async ({
@@ -135,18 +171,20 @@ export const fetchUpstream = async ({
   maxRedirects = 2,
   allowPostRedirect = false,
   signal,
+  upstreamAuth,
 }) => {
-  buildUpstreamRequest({ targetUrl: undefined, method, headers, body });
+  const built = buildUpstreamRequest({ targetUrl: undefined, method, headers, body, upstreamAuth });
+  const requestHeaders = built.headers;
   let currentUrl = url;
-  let currentMethod = method;
-  let currentBody = body;
+  let currentMethod = built.method;
+  let currentBody = built.body;
   for (let hop = 0; hop <= maxRedirects; hop++) {
     const { url: bound, ip } = await resolveAndBind(currentUrl);
     const res = await sendRequest({
       url: bound,
       ip,
       method: currentMethod,
-      headers,
+      headers: requestHeaders,
       body: currentBody,
       timeoutMs,
       maxBodyBytes,

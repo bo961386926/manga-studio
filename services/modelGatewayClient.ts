@@ -12,6 +12,7 @@ import type {
   GatewayApiError,
   ProviderDTO,
   ModelDTO,
+  ProviderPresetDTO,
   ModelOperation,
 } from '../types/modelGateway';
 
@@ -152,10 +153,34 @@ export const createModel = async (input: {
   adapterKind: string;
   protocolPreset: string;
   endpointPath: string;
+  /** 同服务商不同能力走不同根路径时使用（例：MiniMax 视频在 /v2） */
+  baseUrlOverride?: string;
   accessLevel?: 'verified' | 'vip' | 'admin';
 }): Promise<{ id: string }> => {
   return apiFetch(`/model-invocations/models`, { method: 'POST', body: JSON.stringify(input) });
 };
+
+// ---------- 服务商预设 / 拉取模型（用户不手填地址与协议） ----------
+
+export const listProviderPresets = async (): Promise<ProviderPresetDTO[]> => {
+  const res = await apiFetch(`/model-invocations/provider-presets`);
+  return res.presets;
+};
+
+/** 用已保存的凭据向服务商拉取可用模型（服务端解密注入，浏览器不接触 Key）。 */
+export const discoverProviderModels = async (
+  providerId: string
+): Promise<Array<{ apiModel: string; ownedBy: string | null }>> => {
+  const res = await apiFetch(`/model-invocations/providers/${providerId}/discover-models`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  });
+  return res.models;
+};
+
+// 服务商预设 DTO 定义在共享类型里，避免多处重复（组件与网关客户端同源）
+export type { ProviderPresetDTO };
+
 
 export const deleteModel = async (modelId: string): Promise<void> => {
   await apiFetch(`/model-invocations/models/${modelId}`, { method: 'DELETE' });

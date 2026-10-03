@@ -23,6 +23,7 @@ const withEnv = (overrides, fn) => {
 
 const okUpstream = (capture) => async (opts) => {
   capture.headers = opts.headers;
+  capture.upstreamAuth = opts.upstreamAuth;
   capture.url = opts.url;
   return { status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify({ ok: true })) };
 };
@@ -84,7 +85,10 @@ test('upstream caller injects bearer credential server-side', async () => {
     deps: { fetchUpstream: okUpstream(capture) },
   });
   await caller.call({ jsonBody: { a: 1 }, parseResponse: (parsed) => parsed });
-  assert.equal(capture.headers['Authorization'], 'Bearer sk-upstream');
+  // 凭据经服务端注入通道下发（客户端 headers 袋子禁止 authorization，
+  // 否则上游守卫会把自己的凭据拦成 "forbidden header"）
+  assert.deepEqual(capture.upstreamAuth, { type: 'bearer', secret: 'sk-upstream' });
+  assert.equal(capture.headers['Authorization'], undefined);
   assert.ok(!capture.headers['x-api-key']);
 });
 
@@ -101,7 +105,8 @@ test('upstream caller injects api-key-header credentials under the configured na
     deps: { fetchUpstream: okUpstream(capture) },
   });
   await caller.call({ jsonBody: { a: 1 }, parseResponse: (parsed) => parsed });
-  assert.equal(capture.headers['X-Api-Key'], 'sk-header');
+  assert.deepEqual(capture.upstreamAuth, { type: 'header', headerName: 'X-Api-Key', secret: 'sk-header' });
+  assert.equal(capture.headers['X-Api-Key'], undefined);
   assert.ok(!capture.headers['Authorization']);
 });
 
