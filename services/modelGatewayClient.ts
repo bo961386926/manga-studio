@@ -149,7 +149,7 @@ export const createModel = async (input: {
   providerId: string;
   name: string;
   apiModel: string;
-  capability: 'chat' | 'image' | 'video';
+  capability: 'chat' | 'image' | 'video' | 'tts';
   adapterKind: string;
   protocolPreset: string;
   endpointPath: string;

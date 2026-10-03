@@ -12,7 +12,7 @@ import {
   type ProviderPresetDTO,
 } from './modelGatewayClient';
 
-export type ProviderCapability = 'chat' | 'image' | 'video';
+export type ProviderCapability = 'chat' | 'image' | 'video' | 'tts';
 
 export interface PresetModel {
   apiModel: string;
@@ -29,6 +29,7 @@ export const capabilityLabels: Record<ProviderCapability, string> = {
   chat: '对话',
   image: '图片',
   video: '视频',
+  tts: '配音',
 };
 
 // ---------- 流程环节（本产品主流程：文生图 → 图生图 → 图生视频） ----------

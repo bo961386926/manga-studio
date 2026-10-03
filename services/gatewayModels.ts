@@ -11,7 +11,7 @@ import { listModels } from './modelGatewayClient';
 import { getConfig, setConfig } from './storageService';
 import type { ModelDTO } from '../types/modelGateway';
 
-export type GatewayCapability = 'chat' | 'image' | 'video';
+export type GatewayCapability = 'chat' | 'image' | 'video' | 'tts';
 export type GatewayModelDefaults = Partial<Record<GatewayCapability, string>>;
 
 /** 网关模型列表变化（网关面板增删、迁移导入）时广播的窗口事件名。 */
