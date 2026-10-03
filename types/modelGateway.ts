@@ -109,8 +109,19 @@ export interface ProviderPresetDTO {
   keyUrl: string;
   /** 官方接入文档 */
   docsUrl: string;
+  /** 流程覆盖度：full=一家跑完整流程，partial=部分环节，chat-only=只能做文字阶段 */
+  coverage: 'full' | 'partial' | 'chat-only';
   capabilities: Partial<
-    Record<'chat' | 'image' | 'video', { protocolPreset: string; endpointPath: string; baseUrlOverride?: string }>
+    Record<
+      'chat' | 'image' | 'video',
+      {
+        protocolPreset: string;
+        endpointPath: string;
+        baseUrlOverride?: string;
+        /** 该能力支持的工作流：text / text2image / image2image / text2video / image2video */
+        workflows?: string[];
+      }
+    >
   >;
   suggestedModels: Array<{ apiModel: string; name: string; capability: 'chat' | 'image' | 'video' }>;
 }

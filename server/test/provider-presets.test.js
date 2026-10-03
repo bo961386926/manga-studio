@@ -36,6 +36,44 @@ test('预设表完整性：key 唯一、https 地址、能力协议在白名单�
   assert.ok(PROVIDER_PRESETS.length >= 6, '国内主流服务商至少 6 家');
 });
 
+test('每个能力都声明支持的工作流，且与该能力语义一致', () => {
+  const allowed = {
+    chat: ['text'],
+    image: ['text2image', 'image2image'],
+    video: ['text2video', 'image2video'],
+  };
+  for (const preset of PROVIDER_PRESETS) {
+    for (const [capability, spec] of Object.entries(preset.capabilities)) {
+      assert.ok(Array.isArray(spec.workflows) && spec.workflows.length > 0, `${preset.key}/${capability} 需要 workflows`);
+      for (const wf of spec.workflows) {
+        assert.ok(allowed[capability].includes(wf), `${preset.key}/${capability} 非法工作流 ${wf}`);
+      }
+    }
+  }
+});
+
+test('流程覆盖度按「文生图 + 图生图 + 图生视频」判定，纯对话厂商标为 chat-only', () => {
+  const coverage = Object.fromEntries(PROVIDER_PRESETS.map((p) => [p.key, p.coverage]));
+  // 一家能跑完整流程：对话 + 文生图 + 图生图 + 图生视频
+  assert.equal(coverage.ark, 'full', '火山方舟应能覆盖全流程（Seedream 图生图 + Seedance 图生视频）');
+  // 纯对话厂商
+  for (const key of ['deepseek', 'moonshot', 'hunyuan']) {
+    assert.equal(coverage[key], 'chat-only', `${key} 只能做文字阶段`);
+  }
+  // 有画面能力但不完整（缺图生图或视频）
+  for (const key of ['dashscope', 'minimax', 'siliconflow', 'zhipu', 'qianfan']) {
+    assert.equal(coverage[key], 'partial', `${key} 为部分环节`);
+  }
+});
+
+test('预设按流程覆盖度排序：全流程在前，纯对话在最后', () => {
+  const rank = { full: 0, partial: 1, 'chat-only': 2 };
+  const ranks = PROVIDER_PRESETS.map((p) => rank[p.coverage]);
+  const sorted = [...ranks].sort((a, b) => a - b);
+  assert.deepEqual(ranks, sorted, '预设需按覆盖度排序，避免把纯对话厂商排在推荐位');
+  assert.equal(PROVIDER_PRESETS[0].coverage, 'full');
+});
+
 test('每家预设都提供「获取 API Key」直达页与官方文档（https 链接）', () => {
   for (const preset of PROVIDER_PRESETS) {
     assert.match(preset.keyUrl, /^https:\/\//, `${preset.key} 需要 keyUrl`);
@@ -72,6 +110,7 @@ test('listProviderPresets 返回可安全下发到浏览器的字段', () => {
   const first = list[0];
   assert.ok(first.key && first.name && first.baseUrl);
   assert.ok(first.keyUrl && first.docsUrl, '下发字段需包含取 Key 链接与文档链接');
+  assert.ok(['full', 'partial', 'chat-only'].includes(first.coverage), '下发字段需含覆盖度');
   assert.deepEqual(Object.keys(first.capabilities).length > 0, true);
 });
 

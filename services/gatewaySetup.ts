@@ -31,6 +31,77 @@ export const capabilityLabels: Record<ProviderCapability, string> = {
   video: '视频',
 };
 
+// ---------- 流程环节（本产品主流程：文生图 → 图生图 → 图生视频） ----------
+
+export type PipelineCoverage = 'full' | 'partial' | 'chat-only';
+
+export const coverageLabel = (coverage: PipelineCoverage | string): string => {
+  if (coverage === 'full') return '全流程';
+  if (coverage === 'chat-only') return '仅对话';
+  return '部分环节';
+};
+
+const WORKFLOW_LABELS: Record<string, string> = {
+  text2image: '文生图',
+  image2image: '图生图',
+  text2video: '文生视频',
+  image2video: '图生视频',
+};
+
+// 固定顺序，保证界面徽章稳定不跳动
+const WORKFLOW_ORDER = ['text2image', 'image2image', 'text2video', 'image2video'];
+
+/** 把服务商能力里的工作流翻成徽章文案（对话不出徽章，它是默认项）。 */
+export const capabilityWorkflowLabels = (
+  capabilities: ProviderPresetDTO['capabilities']
+): string[] => {
+  const present = new Set<string>();
+  for (const spec of Object.values(capabilities || {})) {
+    for (const wf of spec?.workflows || []) present.add(wf);
+  }
+  return WORKFLOW_ORDER.filter((wf) => present.has(wf)).map((wf) => WORKFLOW_LABELS[wf]);
+};
+
+export interface CapabilityGap {
+  capability: ProviderCapability;
+  stage: string;
+  suggestion: string;
+}
+
+/**
+ * 已配置模型没覆盖到的环节。
+ * 网关按能力分别解析模型，所以缺谁就有一整个阶段跑不动——必须明确告诉用户，
+ * 而不是等他点到那一步才报错。
+ */
+export const describeMissingCapabilities = (
+  models: Array<{ capability: ProviderCapability }>
+): CapabilityGap[] => {
+  const has = new Set((models || []).map((m) => m.capability));
+  const gaps: CapabilityGap[] = [];
+  if (!has.has('chat')) {
+    gaps.push({
+      capability: 'chat',
+      stage: '剧情改编 / 分镜脚本',
+      suggestion: '火山方舟、阿里云百炼、DeepSeek',
+    });
+  }
+  if (!has.has('image')) {
+    gaps.push({
+      capability: 'image',
+      stage: '定形象 / 关键帧（文生图、图生图）',
+      suggestion: '火山方舟（Seedream）、阿里云百炼（通义万相）',
+    });
+  }
+  if (!has.has('video')) {
+    gaps.push({
+      capability: 'video',
+      stage: '视频生成（图生视频）',
+      suggestion: '火山方舟（Seedance）、阿里云百炼（万相视频）、MiniMax（海螺）',
+    });
+  }
+  return gaps;
+};
+
 export const buildProviderPayload = (
   preset: ProviderPresetDTO,
   scope: 'private' | 'shared' = 'private'

@@ -27,6 +27,9 @@ import {
   addSelectedModels,
   buildModelCandidates,
   capabilityLabels,
+  capabilityWorkflowLabels,
+  coverageLabel,
+  describeMissingCapabilities,
   type ModelCandidate,
   type ProviderCapability,
 } from '../../services/gatewaySetup';
@@ -56,6 +59,12 @@ const accessBadge: Record<string, string> = {
   verified: 'bg-emerald-400/15 text-emerald-300',
   vip: 'bg-amber-400/15 text-amber-300',
   admin: 'bg-rose-400/15 text-rose-300',
+};
+// 流程覆盖度：本产品主流程是文生图→图生图→图生视频，纯对话厂商不该排前面
+const coverageBadge: Record<string, string> = {
+  full: 'bg-emerald-400/15 text-emerald-300',
+  partial: 'bg-sky-400/15 text-sky-300',
+  'chat-only': 'bg-amber-400/15 text-amber-300',
 };
 
 const defaultParams = (capability: string): any => {
@@ -260,6 +269,8 @@ export default function GatewayPanel() {
   };
 
   const supportsMultiCapability = selected ? Object.keys(selected.capabilities).length > 1 : false;
+  // 网关按能力解析模型：缺哪个环节，对应阶段就会失败，这里提前说清楚
+  const gapList = describeMissingCapabilities(models);
   const capabilityOptions = selected
     ? (Object.keys(selected.capabilities) as ProviderCapability[])
     : (['chat', 'image', 'video'] as ProviderCapability[]);
@@ -283,7 +294,7 @@ export default function GatewayPanel() {
           <Sparkles className="w-4 h-4 text-cyan-300" />
           <h4 className="text-sm font-bold text-cyan-100">接入模型服务商</h4>
           <span className="text-[10px] text-slate-500">
-            选服务商 → 填 API Key → 勾模型；接口地址与协议已内置，无需填写
+            选服务商 → 填 API Key → 勾模型；地址与协议已内置。建议先接入「全流程」服务商（火山方舟 / 阿里云百炼）
           </span>
         </div>
 
@@ -309,11 +320,18 @@ export default function GatewayPanel() {
               >
                 <div className="flex items-center gap-1.5 flex-wrap">
                   <span className="text-xs font-semibold text-slate-100">{p.name}</span>
-                  {(Object.keys(p.capabilities) as ProviderCapability[]).map((cap) => (
-                    <span key={cap} className={badge(capBadge[cap])}>{capabilityLabels[cap]}</span>
-                  ))}
+                  <span className={badge(coverageBadge[p.coverage] || coverageBadge.partial)}>
+                    {coverageLabel(p.coverage)}
+                  </span>
                 </div>
-                {p.hint && <p className="text-[10px] text-slate-500 mt-1 leading-relaxed">{p.hint}</p>}
+                {capabilityWorkflowLabels(p.capabilities).length > 0 && (
+                  <div className="flex flex-wrap gap-1 mt-1.5">
+                    {capabilityWorkflowLabels(p.capabilities).map((wf) => (
+                      <span key={wf} className={badge('bg-white/5 text-slate-400')}>{wf}</span>
+                    ))}
+                  </div>
+                )}
+                {p.hint && <p className="text-[10px] text-slate-500 mt-1.5 leading-relaxed">{p.hint}</p>}
               </button>
             ))}
           </div>
@@ -548,6 +566,18 @@ export default function GatewayPanel() {
           <ShieldCheck className="w-4 h-4 text-cyan-300" />
           <h4 className="text-sm font-bold text-cyan-100">可用模型</h4>
         </div>
+        {!loading && gapList.length > 0 && (
+          <div className="mb-2 rounded-xl border border-amber-400/20 bg-amber-400/5 px-3 py-2 space-y-1">
+            <p className="text-[11px] font-semibold text-amber-200">
+              还有环节没有可用模型，对应阶段会失败：
+            </p>
+            {gapList.map((gap) => (
+              <p key={gap.capability} className="text-[11px] text-amber-200/80 leading-relaxed">
+                · 缺{capabilityLabels[gap.capability]}模型 → {gap.stage}；建议接入 {gap.suggestion}
+              </p>
+            ))}
+          </div>
+        )}
         <div className="space-y-1.5 max-h-56 overflow-y-auto pr-1">
           {loading ? (
             <p className="text-xs text-slate-500 py-3">加载中…</p>

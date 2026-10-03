@@ -207,3 +207,53 @@ describe('两段式：connectProvider + addSelectedModels（拉取模型前必�
     expect(bodies[1].protocolPreset).toBe('dashscope-video-async');
   });
 });
+
+describe('describeMissingCapabilities（流程缺口提示）', () => {
+  it('缺图像能力 → 明确告知定形象/关键帧会失败并给出建议服务商', async () => {
+    const { describeMissingCapabilities } = await import('../services/gatewaySetup');
+    const gaps = describeMissingCapabilities([{ capability: 'chat' }, { capability: 'video' }]);
+    expect(gaps).toHaveLength(1);
+    expect(gaps[0].capability).toBe('image');
+    expect(gaps[0].stage).toContain('定形象');
+    expect(gaps[0].suggestion).toContain('火山方舟');
+  });
+
+  it('三种能力齐备 → 无缺口', async () => {
+    const { describeMissingCapabilities } = await import('../services/gatewaySetup');
+    const gaps = describeMissingCapabilities([{ capability: 'chat' }, { capability: 'image' }, { capability: 'video' }]);
+    expect(gaps).toEqual([]);
+  });
+
+  it('一个模型都没有 → 三个缺口都提示（而不是静默）', async () => {
+    const { describeMissingCapabilities } = await import('../services/gatewaySetup');
+    const gaps = describeMissingCapabilities([]);
+    expect(gaps.map((g) => g.capability).sort()).toEqual(['chat', 'image', 'video']);
+  });
+
+  it('同一能力有多个模型也只报一次缺口', async () => {
+    const { describeMissingCapabilities } = await import('../services/gatewaySetup');
+    const gaps = describeMissingCapabilities([{ capability: 'chat' }, { capability: 'chat' }]);
+    expect(gaps.map((g) => g.capability)).toEqual(['image', 'video']);
+  });
+});
+
+describe('coverageLabel（服务商覆盖度文案）', () => {
+  it('三档覆盖度都有人话标签', async () => {
+    const { coverageLabel } = await import('../services/gatewaySetup');
+    expect(coverageLabel('full')).toBe('全流程');
+    expect(coverageLabel('partial')).toBe('部分环节');
+    expect(coverageLabel('chat-only')).toBe('仅对话');
+  });
+});
+
+describe('capabilityWorkflowLabels（环节徽章文案）', () => {
+  it('把工作流翻成用户看得懂的中文，并去掉对话这种非画面环节', async () => {
+    const { capabilityWorkflowLabels } = await import('../services/gatewaySetup');
+    const labels = capabilityWorkflowLabels({
+      chat: { protocolPreset: 'openai-chat', endpointPath: '/x', workflows: ['text'] },
+      image: { protocolPreset: 'openai-image', endpointPath: '/y', workflows: ['text2image', 'image2image'] },
+      video: { protocolPreset: 'ark-video-async', endpointPath: '/z', workflows: ['text2video', 'image2video'] },
+    } as any);
+    expect(labels).toEqual(['文生图', '图生图', '文生视频', '图生视频']);
+  });
+});
