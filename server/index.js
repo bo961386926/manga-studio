@@ -37,6 +37,7 @@ import { startOutboxWorker } from './auth/outbox.js';
 import { startNotificationScheduler } from './notifications.js';
 import { notificationsRouter } from './routes/notifications.js';
 import { creditsRouter } from './routes/credits.js';
+import { paymentsRouter, adminPaymentsRouter } from './routes/payments.js';
 import { startBackupScheduler } from './backup.js';
 
 const app = express();
@@ -64,6 +65,8 @@ app.use('/api/admin', adminRouter);
 app.use('/api/migration', migrationRouter);
 app.use('/api/model-invocations', modelGatewayRouter);
 app.use('/api/notifications', notificationsRouter);
+app.use('/api/payments', paymentsRouter);
+app.use('/api/admin/payments', adminPaymentsRouter);
 app.use('/api/credits', creditsRouter);
 
 // 公告：生效中的公告对所有人可见（未开始的/已结束的不展示）

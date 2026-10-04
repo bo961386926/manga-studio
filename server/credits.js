@@ -87,6 +87,24 @@ export const deductCredits = async (client, { userId, cost, refId, reason = 'inv
   return balanceAfter;
 };
 
+// 支付订单入账：幂等键 = pay:orderNo（重复确认不会重复加钱）。
+export const topupCredits = async (client, { userId, amount, refId, reason = 'topup' }) => {
+  if (!(amount > 0)) return null;
+  await ensureCreditAccount(client, userId);
+  const { rows: updated } = await client.query(
+    `UPDATE credit_accounts SET balance = balance + $2, updated_at = NOW() WHERE user_id = $1 RETURNING balance`,
+    [userId, amount]
+  );
+  const balanceAfter = updated[0].balance;
+  await client.query(
+    `INSERT INTO credit_ledger (user_id, delta, balance_after, reason, ref_type, ref_id, idempotency_key)
+     VALUES ($1, $2, $3, $4, 'payment_order', $5, $6)
+     ON CONFLICT (idempotency_key) DO NOTHING`,
+    [userId, amount, balanceAfter, reason, refId, `pay:${refId}`]
+  );
+  return balanceAfter;
+};
+
 export const refundCredits = async (client, { userId, cost, refId }) => {
   if (cost <= 0) return null;
   await ensureCreditAccount(client, userId);

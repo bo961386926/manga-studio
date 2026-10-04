@@ -4,6 +4,7 @@ import { Plus, Trash2, Loader2, Folder, ChevronRight, Calendar, AlertTriangle, X
 import AdminPanel from './admin/AdminPanel';
 import AnnouncementBanner from './AnnouncementBanner';
 import NotificationBell from './NotificationBell';
+import BillingModal from './BillingModal';
 import { ProjectState, AssetLibraryItem, Character, Scene } from '../types';
 import { getAllProjectsMetadata, createNewProjectState, deleteProjectFromDB, getAllAssetLibraryItems, deleteAssetFromLibrary, loadProjectFromDB, saveProjectToDB } from '../services/storageService';
 import { applyLibraryItemToProject } from '../services/assetLibraryService';
@@ -22,6 +23,7 @@ const Dashboard: React.FC<Props> = ({ onOpenProject, onShowOnboarding, onShowMod
   const [credits, setCredits] = useState<number | null>(null);
   const [referralCode, setReferralCode] = useState<string>('');
   const [showAdminPanel, setShowAdminPanel] = useState(false);
+  const [showBilling, setShowBilling] = useState(false);
   const [projects, setProjects] = useState<ProjectState[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
@@ -368,6 +370,19 @@ const Dashboard: React.FC<Props> = ({ onOpenProject, onShowOnboarding, onShowMod
               >
                 每日签到
               </button>
+              <button
+                onClick={() => setShowBilling(true)}
+                className="text-[10px] px-2 py-1 rounded-lg border border-amber-400/30 text-amber-300 hover:bg-amber-400/10 transition-colors"
+              >
+                充值 / 会员
+              </button>
+              {showBilling && (
+                <BillingModal
+                  open
+                  onClose={() => setShowBilling(false)}
+                  onPaid={refreshCredits}
+                />
+              )}
               <button
                 onClick={handleRedeem}
                 className="text-[10px] px-2 py-1 rounded-lg border border-white/15 text-slate-400 hover:text-white hover:bg-white/5 transition-colors"

@@ -21,6 +21,8 @@ import {
   revokeVip,
   setRegistrationOpen,
 } from '../../services/adminClient';
+import { adminConfirm, adminListOrders, adminReconcile } from '../../services/paymentsClient';
+import type { OrderDTO } from '../../services/paymentsClient';
 
 const card = 'rounded-2xl border border-white/10 bg-slate-950/70 p-4';
 
@@ -37,7 +39,7 @@ const StatCard: React.FC<{ icon: React.ReactNode; label: string; value: React.Re
 const isReauthError = (e: any) => /reauth/i.test(String(e?.message || ''));
 
 export default function AdminPanel({ onBack }: { onBack: () => void }) {
-  const [tab, setTab] = useState<'overview' | 'users' | 'announcements' | 'redeem'>('overview');
+  const [tab, setTab] = useState<'overview' | 'payments' | 'users' | 'announcements' | 'redeem'>('overview');
   const [batches, setBatches] = useState<RedeemBatchRow[]>([]);
   const [batchName, setBatchName] = useState('');
   const [batchCredits, setBatchCredits] = useState('50');
@@ -61,6 +63,33 @@ export default function AdminPanel({ onBack }: { onBack: () => void }) {
   const [pendingAction, setPendingAction] = useState<(() => Promise<void>) | null>(null);
   const [reauthPwd, setReauthPwd] = useState('');
   const [reauthBusy, setReauthBusy] = useState(false);
+  const [payOrders, setPayOrders] = useState<OrderDTO[]>([]);
+  const [payFilter, setPayFilter] = useState<'pending' | 'paid' | 'cancelled'>('pending');
+  const [reconcile, setReconcile] = useState<Awaited<ReturnType<typeof adminReconcile>> | null>(null);
+  const [confirmBusy, setConfirmBusy] = useState('');
+
+  const loadPayments = useCallback(async (filter = payFilter) => {
+    try {
+      setPayOrders((await adminListOrders(filter)).orders);
+      setReconcile(await adminReconcile(30));
+    } catch (e: any) { setErr(e?.message || '支付订单加载失败'); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [payFilter]);
+
+  const confirmPayOrder = async (o: OrderDTO) => {
+    const ref = window.prompt(`确认已收到 ${o.user_email || ''} 对订单 ${o.orderNo}（¥${(o.amountCents / 100).toFixed(2)}）的转账？\n可填写转账凭证号/流水号（可留空）：`, '') ;
+    if (ref === null) return; // 用户取消
+    setConfirmBusy(o.orderNo);
+    try {
+      await adminConfirm(o.orderNo, ref || undefined);
+      flash(`订单 ${o.orderNo} 已确认入账`);
+      await loadPayments();
+    } catch (e: any) {
+      const m = String(e?.message || '');
+      if (isReauthError(m)) { setPendingAction(() => () => confirmPayOrder(o)); setErr('需要重新验证密码'); }
+      else setErr(m || '确认失败');
+    } finally { setConfirmBusy(''); }
+  };
 
   const flash = (m: string) => {
     setMsg(m);
@@ -96,6 +125,11 @@ export default function AdminPanel({ onBack }: { onBack: () => void }) {
     Promise.all([loadOverview().catch((e) => setErr(e.message)), loadUsers().catch((e) => setErr(e.message)), loadRegistration().catch(() => undefined), loadAnnouncements().catch(() => undefined), loadBatches().catch(() => undefined)])
       .finally(() => setLoading(false));
   }, [loadOverview, loadUsers, loadRegistration, loadAnnouncements, loadBatches]);
+
+  // 支付订单：切到该 tab 或切换过滤状态时加载。
+  useEffect(() => {
+    if (tab === 'payments') loadPayments().catch(() => undefined);
+  }, [tab, loadPayments]);
 
   // 敏感操作统一入口：遇到「需要重新认证」则弹密码框后重试同一动作。
   const runSensitive = async (action: () => Promise<void>, okMsg: string) => {
@@ -156,7 +190,7 @@ export default function AdminPanel({ onBack }: { onBack: () => void }) {
             </h1>
           </div>
           <div className="flex items-center gap-2 text-sm">
-            {(['overview', 'users', 'announcements', 'redeem'] as const).map((t) => (
+            {(['overview', 'payments', 'users', 'announcements', 'redeem'] as const).map((t) => (
               <button
                 key={t}
                 onClick={() => setTab(t)}
@@ -164,7 +198,7 @@ export default function AdminPanel({ onBack }: { onBack: () => void }) {
                   tab === t ? 'bg-cyan-300 text-slate-950 font-bold' : 'text-slate-400 hover:text-cyan-300'
                 }`}
               >
-                {t === 'overview' ? '运营概览' : t === 'users' ? '用户管理' : t === 'announcements' ? '公告管理' : '兑换码'}
+                {t === 'overview' ? '运营概览' : t === 'payments' ? '支付订单' : t === 'users' ? '用户管理' : t === 'announcements' ? '公告管理' : '兑换码'}
               </button>
             ))}
           </div>
@@ -215,6 +249,69 @@ export default function AdminPanel({ onBack }: { onBack: () => void }) {
               >
                 {regOpen ? '开放中' : '已关闭'}
               </button>
+            </div>
+          </div>
+        )}
+
+        {!loading && tab === 'payments' && (
+          <div className="space-y-4">
+            {reconcile && (
+              <div className={card}>
+                <div className="mb-2 text-xs text-slate-400">近 30 天对账</div>
+                <div className="flex flex-wrap gap-4 text-sm text-slate-200">
+                  <span>已支付订单 <b className="text-cyan-300">{reconcile.totals.orders}</b></span>
+                  <span>总金额 <b className="text-amber-300">¥{(Number(reconcile.totals.amount_cents) / 100).toFixed(2)}</b></span>
+                  <span>会员单 <b>{reconcile.totals.vip_orders}</b></span>
+                  <span>积分单 <b>{reconcile.totals.credits_orders}</b></span>
+                </div>
+              </div>
+            )}
+            <div className={card}>
+              <div className="mb-3 flex items-center gap-2">
+                {(['pending', 'paid', 'cancelled'] as const).map((f) => (
+                  <button
+                    key={f}
+                    onClick={() => { setPayFilter(f); loadPayments(f); }}
+                    className={`px-3 py-1 rounded-lg text-xs transition-colors ${
+                      payFilter === f ? 'bg-cyan-300 text-slate-950 font-bold' : 'text-slate-400 hover:text-cyan-300'
+                    }`}
+                  >
+                    {f === 'pending' ? '待确认' : f === 'paid' ? '已到账' : '已取消'}
+                  </button>
+                ))}
+              </div>
+              {payOrders.length === 0 ? (
+                <div className="py-6 text-center text-xs text-slate-500">暂无{payFilter === 'pending' ? '待确认' : ''}订单</div>
+              ) : (
+                <div className="space-y-2">
+                  {payOrders.map((o) => (
+                    <div key={o.orderNo} className="flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.02] px-3 py-2">
+                      <div className="min-w-0">
+                        <div className="truncate text-xs text-slate-200">
+                          {o.title} · <span className="text-amber-300">¥{(o.amountCents / 100).toFixed(2)}</span> · {o.user_email}
+                        </div>
+                        <div className="text-[10px] text-slate-500">
+                          {o.orderNo} · {new Date(o.createdAt).toLocaleString('zh-CN')}
+                          {o.providerRef ? ` · 凭证:${o.providerRef}` : ''}
+                        </div>
+                      </div>
+                      {o.status === 'pending' ? (
+                        <button
+                          disabled={confirmBusy === o.orderNo}
+                          onClick={() => confirmPayOrder(o)}
+                          className="shrink-0 rounded-lg bg-emerald-400/90 px-3 py-1 text-xs font-bold text-slate-950 hover:bg-emerald-300 disabled:opacity-50"
+                        >
+                          {confirmBusy === o.orderNo ? '确认中…' : '确认到账'}
+                        </button>
+                      ) : (
+                        <span className={`shrink-0 text-[10px] ${o.status === 'paid' ? 'text-emerald-300' : 'text-slate-500'}`}>
+                          {o.status === 'paid' ? `已入账 ${o.paidAt ? new Date(o.paidAt).toLocaleDateString('zh-CN') : ''}` : '已取消'}
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         )}

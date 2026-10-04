@@ -19,8 +19,10 @@ export const canUseCapability = async ({ userId, accessLevel }) => {
   return false;
 };
 
-export const grantVip = async ({ userId, expiresAt = null, grantedBy = null, reason = null }) => {
-  await pool.query(
+// client 可选：支付确认等调用方传入事务客户端，保证与订单状态同事务提交。
+export const grantVip = async ({ userId, expiresAt = null, grantedBy = null, reason = null, client = null }) => {
+  const db = client || pool;
+  await db.query(
     `INSERT INTO user_entitlements (id, user_id, entitlement_key, enabled, expires_at, granted_by, reason)
      VALUES (gen_random_uuid(), $1, 'vip', TRUE, $2, $3, $4)
      ON CONFLICT (user_id, entitlement_key)
