@@ -6,7 +6,9 @@ ARG NPM_REGISTRY=https://registry.npmjs.org
 WORKDIR /app
 
 # 自动备份链路依赖：pg_dump（大版本需与服务端 postgres 16 对齐）+ age（可选备份加密）
-RUN apk add --no-cache postgresql16-client age
+# Alpine 官方 CDN 在中国大陆极慢/经常超时，固定换阿里云镜像源（全球可达）
+RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories && \
+    apk add --no-cache postgresql16-client age
 
 COPY package*.json ./
 
