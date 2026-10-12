@@ -61,6 +61,8 @@ services:
       # RATE_LIMIT_DISABLED 旁路限流。生产 .env 两者都必须保持 false！
       # Cookie Secure 开关：HTTP 过渡期在 .env 设 COOKIE_SECURE=false（见 session.js）
       - COOKIE_SECURE=${COOKIE_SECURE:-}
+      # 人机验证（登录/注册 SVG 图形验证码）：生产设 true；测试环境默认关闭
+      - CAPTCHA_ENABLED=${CAPTCHA_ENABLED:-false}
       # 手动转账收款说明（支付闭环 manual 渠道展示给用户）
       - PAY_MANUAL_ACCOUNT=${PAY_MANUAL_ACCOUNT:-}
       - EMAIL_VERIFICATION_DISABLED=${EMAIL_VERIFICATION_DISABLED:-false}
