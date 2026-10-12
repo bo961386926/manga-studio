@@ -9,6 +9,31 @@ export interface SessionUser {
   status: string;
 }
 
+// 人机验证挑战（服务端 SVG 图形验证码；enabled=false 时登录/注册不带验证码字段）
+export interface CaptchaChallenge {
+  enabled: boolean;
+  captchaId?: string;
+  svg?: string;
+}
+
+export interface CaptchaAnswer {
+  captchaId: string;
+  text: string;
+}
+
+const captchaMessage = (code?: string) =>
+  code === 'CAPTCHA_REQUIRED' || code === 'CAPTCHA_INVALID' ? '请输入正确的验证码' : undefined;
+
+export const fetchCaptcha = async (): Promise<CaptchaChallenge> => {
+  try {
+    const res = await fetch('/api/auth/captcha', { credentials: 'same-origin' });
+    if (!res.ok) return { enabled: false };
+    return (await res.json()) as CaptchaChallenge;
+  } catch {
+    return { enabled: false };
+  }
+};
+
 export const fetchMe = async (): Promise<SessionUser | null> => {
   try {
     return await apiFetch('/auth/me');
@@ -17,18 +42,27 @@ export const fetchMe = async (): Promise<SessionUser | null> => {
   }
 };
 
-export const login = async (email: string, password: string): Promise<SessionUser> => {
+export const login = async (
+  email: string,
+  password: string,
+  captcha?: CaptchaAnswer
+): Promise<SessionUser> => {
   const res = await fetch('/api/auth/login', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'same-origin',
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify({
+      email,
+      password,
+      ...(captcha ? { captchaId: captcha.captchaId, captchaText: captcha.text } : {}),
+    }),
   });
   if (!res.ok) {
     if (res.status === 429) throw new Error('登录尝试过于频繁，请稍后再试');
     if (res.status === 403) throw new Error('登录请求被服务器拒绝，请检查本地服务来源配置');
     if (res.status >= 500) throw new Error('登录服务暂时不可用，请稍后再试');
-    throw new Error('邮箱或密码不正确');
+    const body = await res.json().catch(() => ({}));
+    throw new Error(captchaMessage(body.error) || '邮箱或密码不正确');
   }
   const body = await res.json();
   setCsrfToken(body.csrfToken);
@@ -64,15 +98,25 @@ export const changePassword = async (
   setCsrfToken(body.csrfToken);
 };
 
-export const register = async (email: string, password: string, referralCode?: string): Promise<void> => {
+export const register = async (
+  email: string,
+  password: string,
+  referralCode?: string,
+  captcha?: CaptchaAnswer
+): Promise<void> => {
   const res = await fetch('/api/auth/register', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password, ...(referralCode ? { referralCode } : {}) }),
+    body: JSON.stringify({
+      email,
+      password,
+      ...(referralCode ? { referralCode } : {}),
+      ...(captcha ? { captchaId: captcha.captchaId, captchaText: captcha.text } : {}),
+    }),
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body.error || '注册失败');
+    throw new Error(captchaMessage(body.error) || body.error || '注册失败');
   }
 };
 

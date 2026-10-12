@@ -1,9 +1,9 @@
 // Full-screen authentication page: login / register / password reset.
 // Replaces the top-bar login banner so auth feels like a real page, with a
 // smooth enter animation and consistent dark theme.
-import React, { useEffect, useState } from 'react';
-import { Clapperboard, Loader2, AlertCircle, CheckCircle2, ArrowLeft, Eye, EyeOff } from 'lucide-react';
-import { login, register, requestPasswordReset, verifyEmail, resetPassword, SessionUser } from '../services/authClient';
+import React, { useCallback, useEffect, useState } from 'react';
+import { Clapperboard, Loader2, AlertCircle, CheckCircle2, ArrowLeft, Eye, EyeOff, RefreshCw } from 'lucide-react';
+import { login, register, requestPasswordReset, verifyEmail, resetPassword, fetchCaptcha, SessionUser, CaptchaChallenge, CaptchaAnswer } from '../services/authClient';
 
 type Mode = 'login' | 'register' | 'reset' | 'verify' | 'reset-token';
 
@@ -22,6 +22,24 @@ export default function AuthPage({ onAuthed }: { onAuthed: (u: SessionUser) => v
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
   const [actionToken, setActionToken] = useState('');
+  const [captcha, setCaptcha] = useState<CaptchaChallenge | null>(null);
+  const [captchaText, setCaptchaText] = useState('');
+
+  const needsCaptcha = mode === 'login' || mode === 'register';
+
+  // 拉取人机验证挑战：服务端关闭验证码时 enabled=false，前端自动退化为无验证码表单。
+  const loadCaptcha = useCallback(async () => {
+    setCaptchaText('');
+    try {
+      setCaptcha(await fetchCaptcha());
+    } catch {
+      setCaptcha({ enabled: false });
+    }
+  }, []);
+
+  useEffect(() => {
+    if (needsCaptcha) loadCaptcha();
+  }, [needsCaptcha, loadCaptcha]);
 
   // 邮件操作链接直达：#/verify-email?token=… 自动验证；#/reset-password?token=… 进入设置新密码表单
   useEffect(() => {
@@ -64,13 +82,17 @@ export default function AuthPage({ onAuthed }: { onAuthed: (u: SessionUser) => v
     setErr('');
     setMsg('');
     try {
+      const captchaAnswer: CaptchaAnswer | undefined =
+        needsCaptcha && captcha?.enabled && captcha.captchaId
+          ? { captchaId: captcha.captchaId, text: captchaText }
+          : undefined;
       if (mode === 'login') {
-        const u = await login(email.trim(), password);
+        const u = await login(email.trim(), password, captchaAnswer);
         onAuthed(u);
       } else if (mode === 'register') {
         if (password.length < 10) throw new Error('密码至少 10 位');
         if (password !== confirm) throw new Error('两次输入的密码不一致');
-        await register(email.trim(), password, referralCode.trim() || undefined);
+        await register(email.trim(), password, referralCode.trim() || undefined, captchaAnswer);
         switchMode('login');
         setMsg('注册成功！验证链接已发送到你的邮箱，请查收并点击验证后登录');
       } else if (mode === 'reset-token') {
@@ -85,6 +107,8 @@ export default function AuthPage({ onAuthed }: { onAuthed: (u: SessionUser) => v
       }
     } catch (e: any) {
       setErr(e?.message || '操作失败，请稍后重试');
+      // 验证码一次性有效：任何登录/注册失败都换新挑战，避免拿旧图重试必败
+      if (needsCaptcha) loadCaptcha();
     } finally {
       setBusy(false);
     }
@@ -162,6 +186,30 @@ export default function AuthPage({ onAuthed }: { onAuthed: (u: SessionUser) => v
                     <span className="pointer-events-none absolute inset-y-0 right-0 w-11 flex items-center justify-center text-slate-600">
                       {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                     </span>
+                  </div>
+                )}
+                {captcha?.enabled && captcha.svg && (
+                  <div className="flex items-stretch gap-2">
+                    <button
+                      type="button"
+                      onClick={loadCaptcha}
+                      title="看不清？点击刷新"
+                      aria-label="刷新验证码"
+                      className="shrink-0 rounded-xl overflow-hidden border border-slate-700/80 bg-slate-100 hover:border-cyan-400/70 transition-colors"
+                    >
+                      <span className="block w-[132px] h-[44px] [&>svg]:block" dangerouslySetInnerHTML={{ __html: captcha.svg }} />
+                    </button>
+                    <input
+                      className={inputCls}
+                      type="text"
+                      inputMode="text"
+                      placeholder="验证码"
+                      autoComplete="off"
+                      maxLength={8}
+                      value={captchaText}
+                      onChange={(e) => setCaptchaText(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && submit()}
+                    />
                   </div>
                 )}
                 <button

@@ -35,10 +35,36 @@ import {
 import { isRegistrationOpen } from './entitlements.js';
 import { trackEvent } from '../analytics.js';
 import { recordAudit } from './audit.js';
+import { issueCaptcha, verifyCaptcha, captchaEnabled } from './captcha.js';
 
 export const authRouter = Router();
 
 const GENERIC_AUTH_FAILURE = { error: 'invalid credentials' };
+
+// 人机验证关隘（login/register 共用）：CAPTCHA_ENABLED=true 时强制单次有效挑战。
+// 验证码错误统一 422 + CAPTCHA_* 错误码，与 401 invalid credentials 区分开。
+const enforceCaptcha = (req, res) => {
+  if (!captchaEnabled()) return true;
+  const verdict = verifyCaptcha(req.body?.captchaId, req.body?.captchaText);
+  if (verdict === 'required') {
+    res.status(422).json({ error: 'CAPTCHA_REQUIRED' });
+    return false;
+  }
+  if (verdict !== 'ok') {
+    res.status(422).json({ error: 'CAPTCHA_INVALID' });
+    return false;
+  }
+  return true;
+};
+
+// ---------- captcha challenge ----------
+authRouter.get('/captcha', (req, res) => {
+  if (!captchaEnabled()) {
+    return res.json({ enabled: false });
+  }
+  const { captchaId, svg } = issueCaptcha();
+  return res.json({ enabled: true, captchaId, svg });
+});
 const TOKEN_TTL = { verify_email: 24 * 60 * 60 * 1000, reset_password: 30 * 60 * 1000 };
 
 // Dummy Argon2 hash so unknown-email logins cost the same as real ones.
@@ -65,6 +91,7 @@ authRouter.post(
   '/register',
   registerLimiter,
   wrap(async (req, res) => {
+    if (!enforceCaptcha(req, res)) return;
     const { email, password } = req.body || {};
     if (!(await isRegistrationOpen())) {
       return res.status(403).json({ error: 'registration closed' });
@@ -186,6 +213,7 @@ authRouter.post(
   loginLimiter,
   loginEmailLimiter,
   wrap(async (req, res) => {
+    if (!enforceCaptcha(req, res)) return;
     const { email, password } = req.body || {};
     const normalized = normalizeEmail(email);
     const dummyHash = await getDummyHash();
