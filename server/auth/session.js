@@ -7,9 +7,15 @@ export const SESSION_COOKIE = 'ms_session';
 export const SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 export const CSRF_TTL_MS = 10 * 60 * 1000;
 
+// COOKIE_SECURE (when set) explicitly overrides the NODE_ENV-derived default,
+// so a transitional HTTP deployment (certificate pending) can set
+// COOKIE_SECURE=false and keep sessions working. Default behavior unchanged.
 export const cookieOptions = () => ({
   httpOnly: true,
-  secure: process.env.NODE_ENV === 'production',
+  secure:
+    process.env.COOKIE_SECURE !== undefined && process.env.COOKIE_SECURE !== ''
+      ? process.env.COOKIE_SECURE === 'true'
+      : process.env.NODE_ENV === 'production',
   sameSite: 'lax',
   path: '/',
   maxAge: SESSION_MAX_AGE_MS,
