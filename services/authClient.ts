@@ -146,3 +146,13 @@ export const resetPassword = async (token: string, password: string): Promise<vo
   });
   if (!res.ok) throw new Error('重置失败，链接可能已过期');
 };
+
+// 首管理员激活：bootstrap-admin.js 生成的 24h 一次性链接（#/bootstrap?token=…）设置密码并激活账号。
+export const completeBootstrap = async (token: string, password: string): Promise<void> => {
+  const res = await fetch('/api/auth/bootstrap-complete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token, password }),
+  });
+  if (!res.ok) throw new Error('激活失败，链接可能已过期或已被使用');
+};

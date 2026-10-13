@@ -3,9 +3,10 @@
 // smooth enter animation and consistent dark theme.
 import React, { useCallback, useEffect, useState } from 'react';
 import { Clapperboard, Loader2, AlertCircle, CheckCircle2, ArrowLeft, Eye, EyeOff, RefreshCw } from 'lucide-react';
-import { login, register, requestPasswordReset, verifyEmail, resetPassword, fetchCaptcha, SessionUser, CaptchaChallenge, CaptchaAnswer } from '../services/authClient';
+import { login, register, requestPasswordReset, verifyEmail, resetPassword, completeBootstrap, fetchCaptcha, SessionUser, CaptchaChallenge, CaptchaAnswer } from '../services/authClient';
+import { parseHashAction } from './AuthPage/hashAction';
 
-type Mode = 'login' | 'register' | 'reset' | 'verify' | 'reset-token';
+type Mode = 'login' | 'register' | 'reset' | 'verify' | 'reset-token' | 'bootstrap';
 
 const inputCls =
   'w-full bg-slate-900/70 border border-slate-700/80 rounded-xl px-4 py-2.5 text-sm text-slate-100 ' +
@@ -41,19 +42,15 @@ export default function AuthPage({ onAuthed }: { onAuthed: (u: SessionUser) => v
     if (needsCaptcha) loadCaptcha();
   }, [needsCaptcha, loadCaptcha]);
 
-  // 邮件操作链接直达：#/verify-email?token=… 自动验证；#/reset-password?token=… 进入设置新密码表单
+  // 邮件/离线操作链接直达：#/verify-email?token=… 自动验证；#/bootstrap?token=… 激活管理员；#/reset-password?token=… 设置新密码
   useEffect(() => {
-    const hash = window.location.hash || '';
-    const parseToken = (name: string) => {
-      const m = hash.match(new RegExp(`^#/${name}\\?token=([A-Za-z0-9\\-_]+)`));
-      return m ? m[1] : '';
-    };
-    const verifyToken = parseToken('verify-email');
-    if (verifyToken) {
+    const action = parseHashAction(window.location.hash || '');
+    if (action.kind === 'verify') {
+      const { token } = action;
       setMode('verify');
       (async () => {
         try {
-          await verifyEmail(verifyToken);
+          await verifyEmail(token);
           setMsg('邮箱验证成功，请登录');
         } catch (e: any) {
           setErr(e?.message || '验证链接无效或已过期');
@@ -64,9 +61,13 @@ export default function AuthPage({ onAuthed }: { onAuthed: (u: SessionUser) => v
       })();
       return;
     }
-    const resetToken = parseToken('reset-password');
-    if (resetToken) {
-      setActionToken(resetToken);
+    if (action.kind === 'bootstrap') {
+      setActionToken(action.token);
+      setMode('bootstrap');
+      return;
+    }
+    if (action.kind === 'reset') {
+      setActionToken(action.token);
       setMode('reset-token');
     }
   }, []);
@@ -95,6 +96,12 @@ export default function AuthPage({ onAuthed }: { onAuthed: (u: SessionUser) => v
         await register(email.trim(), password, referralCode.trim() || undefined, captchaAnswer);
         switchMode('login');
         setMsg('注册成功！验证链接已发送到你的邮箱，请查收并点击验证后登录');
+      } else if (mode === 'bootstrap') {
+        if (password.length < 10) throw new Error('密码至少 10 位');
+        if (password !== confirm) throw new Error('两次输入的密码不一致');
+        await completeBootstrap(actionToken, password);
+        switchMode('login');
+        setMsg('管理员账号已激活，请用新密码登录');
       } else if (mode === 'reset-token') {
         if (password.length < 10) throw new Error('密码至少 10 位');
         if (password !== confirm) throw new Error('两次输入的密码不一致');
@@ -131,6 +138,7 @@ export default function AuthPage({ onAuthed }: { onAuthed: (u: SessionUser) => v
                 : mode === 'register' ? '创建账号'
                 : mode === 'verify' ? '验证邮箱'
                 : mode === 'reset-token' ? '设置新密码'
+                : mode === 'bootstrap' ? '激活管理员账号'
                 : '找回密码'}
             </p>
           </div>
@@ -144,15 +152,21 @@ export default function AuthPage({ onAuthed }: { onAuthed: (u: SessionUser) => v
               </div>
             ) : mode !== 'reset' ? (
               <>
-                <input
-                  className={inputCls}
-                  type="email"
-                  placeholder="邮箱"
-                  autoComplete="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && submit()}
-                />
+                {mode !== 'bootstrap' ? (
+                  <input
+                    className={inputCls}
+                    type="email"
+                    placeholder="邮箱"
+                    autoComplete="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && submit()}
+                  />
+                ) : (
+                  <p className="text-xs text-slate-400 leading-relaxed">
+                    设置管理员登录密码以完成激活（链接绑定的邮箱无需再填写）。
+                  </p>
+                )}
                 <div className="relative">
                   <input
                     className={`${inputCls} pr-11`}
@@ -173,7 +187,7 @@ export default function AuthPage({ onAuthed }: { onAuthed: (u: SessionUser) => v
                     {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
                 </div>
-                {(mode === 'register' || mode === 'reset-token') && (
+                {(mode === 'register' || mode === 'reset-token' || mode === 'bootstrap') && (
                   <div className="relative">
                     <input
                       className={`${inputCls} pr-11`}
@@ -220,7 +234,7 @@ export default function AuthPage({ onAuthed }: { onAuthed: (u: SessionUser) => v
                              flex items-center justify-center gap-2"
                 >
                   {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-                  {mode === 'login' ? '登录' : mode === 'reset-token' ? '设置新密码' : '注册'}
+                  {mode === 'login' ? '登录' : mode === 'reset-token' ? '设置新密码' : mode === 'bootstrap' ? '激活管理员账号' : '注册'}
                 </button>
               </>
             ) : (
