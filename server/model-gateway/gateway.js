@@ -4,7 +4,7 @@
 // so tests exercise real idempotency without network.
 // Design source: self-hosted-cloud-models-design.md §5.3, §5.5, §9.
 import crypto from 'node:crypto';
-import { withUserContext } from '../db.js';
+import { withUserContext, withTransaction } from '../db.js';
 import { sealSecret, openSecret, requestHash } from './crypto.js';
 import { PolicyError } from './policy.js';
 import { uploadMedia, getMediaRecord } from './media.js';
@@ -239,6 +239,8 @@ export const createAsyncJob = async ({ userId, isAdmin, model, provider, idempot
         [job.id]
       )
     );
+    // submission_uncertain 状态不退款（需人工介入），但记录等待解决
+    // 后台调度器会定期检查并超过阈值后退款（见 resolveStaleUncertainJobs）
     return { schemaVersion: 1, kind: 'job', jobId: job.id, status: 'submission_uncertain' };
   }
 
@@ -280,6 +282,9 @@ export const pollJob = async ({ userId, isAdmin, job, deps }) => {
   if (job.expires_at && new Date(job.expires_at).getTime() < Date.now()) {
     return withUserContext({ userId, isAdmin }, async (client) => {
       await client.query(`UPDATE model_jobs SET status = 'expired', updated_at = NOW() WHERE id = $1`, [job.id]);
+      // 任务过期未完成 → 退款
+      const cost = await creditCost(client, 'video');
+      await refundCredits(client, { userId, cost, refId: job.invocation_id });
       return { ...job, status: 'expired' };
     });
   }
@@ -321,6 +326,9 @@ export const pollJob = async ({ userId, isAdmin, job, deps }) => {
         [job.id, String(upstream.error || 'upstream failed').slice(0, 500)]
       );
       await client.query(`UPDATE model_invocations SET status = 'failed', updated_at = NOW() WHERE id = $1`, [job.invocation_id]);
+      // 上游执行失败 → 退款（幂等，使用 invocation_id 作 idempotency_key）
+      const cost = await creditCost(client, 'video');
+      await refundCredits(client, { userId, cost, refId: job.invocation_id });
       await createNotification(client, { userId: job.user_id, kind: 'job_failed', payload: { jobId: job.id } });
       return { ...job, status: 'failed' };
     });
@@ -356,6 +364,9 @@ export const pollJob = async ({ userId, isAdmin, job, deps }) => {
         `UPDATE model_jobs SET status = 'failed', error_code = 'DOWNLOAD_FAILED', error_message = $2, updated_at = NOW() WHERE id = $1`,
         [job.id, String(err.message).slice(0, 500)]
       );
+      // 下载失败 → 退款
+      const cost = await creditCost(client, 'video');
+      await refundCredits(client, { userId, cost, refId: job.invocation_id });
       return { ...job, status: 'failed' };
     });
   }
@@ -371,6 +382,36 @@ export const cancelJob = async ({ userId, isAdmin, jobId }) => {
       [jobId]
     );
     await client.query(`UPDATE model_invocations SET status = 'cancelled', updated_at = NOW() WHERE id = $1`, [job.invocation_id]);
+    // 用户主动取消 → 退款
+    const cost = await creditCost(client, 'video');
+    await refundCredits(client, { userId, cost, refId: job.invocation_id });
     return { ...job, status: 'cancel_requested' };
+  });
+};
+
+// Resolve stale submission_uncertain jobs: if stuck > 1 hour, refund and mark failed.
+// Called by background scheduler (e.g., every 10 minutes).
+export const resolveStaleUncertainJobs = async () => {
+  const maxAgeMs = 60 * 60 * 1000; // 1 hour
+  const cutoff = new Date(Date.now() - maxAgeMs).toISOString();
+
+  return withTransaction(async (client) => {
+    const { rows } = await client.query(
+      `SELECT id, user_id, invocation_id FROM model_jobs
+       WHERE status = 'submission_uncertain' AND updated_at < $1`,
+      [cutoff]
+    );
+    let resolved = 0;
+    for (const job of rows) {
+      const cost = await creditCost(client, 'video');
+      await refundCredits(client, { userId: job.user_id, cost, refId: job.invocation_id });
+      await client.query(
+        `UPDATE model_jobs SET status = 'failed', error_code = 'SUBMISSION_TIMEOUT', error_message = 'Submission outcome unknown for > 1 hour, auto-refunded', updated_at = NOW() WHERE id = $1`,
+        [job.id]
+      );
+      await client.query(`UPDATE model_invocations SET status = 'failed', updated_at = NOW() WHERE id = $1`, [job.invocation_id]);
+      resolved++;
+    }
+    return { resolved, cutoff };
   });
 };

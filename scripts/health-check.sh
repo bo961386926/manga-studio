@@ -4,6 +4,9 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
+# 统一从 .env 读取端口，避免硬编码漂移
+set -a; source .env 2>/dev/null || true; set +a
+
 API_CONTAINER=manga-studio-api
 APP_CONTAINER=manga-studio-app
 DB_CONTAINER=manga-studio-db

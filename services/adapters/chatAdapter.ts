@@ -1,6 +1,7 @@
 import { ChatModelDefinition, ChatOptions, ChatModelParams } from '../../types/model';
-import { getApiKeyForModel, getApiBaseUrlForModel, getActiveChatModel } from '../modelRegistry';
+import { getApiKeyForModel, getApiBaseUrlForModel, getActiveChatModel, getModelById } from '../modelRegistry';
 import { proxyFetch } from '../apiClient';
+import { invokeChat, makeIdempotencyKey } from '../modelGatewayClient';
 
 export class ApiKeyError extends Error {
   constructor(message: string) {
@@ -42,15 +43,10 @@ const cleanJsonResponse = (response: string): string => {
   return cleaned.trim();
 };
 
-export const callChatApi = async (
+const legacyCallChatApi = async (
   options: ChatOptions,
-  model?: ChatModelDefinition
+  activeModel: ChatModelDefinition
 ): Promise<string> => {
-  const activeModel = model || getActiveChatModel();
-  if (!activeModel) {
-    throw new Error('没有可用的对话模型');
-  }
-
   const apiKey = getApiKeyForModel(activeModel.id);
   if (!apiKey) {
     throw new ApiKeyError('API Key 缺失，请在设置中配置 API Key');
@@ -93,7 +89,6 @@ export const callChatApi = async (
   }
   
   if (options.responseFormat === 'json') {
-    // MiniMax OpenAI 兼容接口不支持 response_format 参数，依赖提示词输出 JSON
     if (activeModel.providerId !== 'minimax') {
       requestBody.response_format = { type: 'json_object' };
     }
@@ -124,7 +119,6 @@ export const callChatApi = async (
           const errorText = await res.text();
           if (errorText) errorMessage = errorText;
         }
-        // MiniMax 余额不足(1008)等错误的中文友好提示
         if (errorMessage.includes('insufficient balance') || errorMessage.includes('1008')) {
           errorMessage = 'MiniMax 账户余额不足 (1008)：请前往 MiniMax 开放平台充值或领取免费额度后重试';
         }
@@ -153,5 +147,34 @@ export const callChatApi = async (
     
     throw error;
   }
+};
+
+export const callChatApi = async (
+  options: ChatOptions,
+  model?: ChatModelDefinition
+): Promise<string> => {
+  const activeModel = model || getActiveChatModel();
+  if (!activeModel) {
+    throw new Error('没有可用的对话模型');
+  }
+
+  // Gateway 路由：adapter_kind === 'gateway' 走服务端网关
+  if (activeModel.adapter_kind === 'gateway') {
+    const result = await invokeChat(
+      activeModel.id,
+      { 
+        prompt: options.prompt, 
+        systemPrompt: options.systemPrompt, 
+        responseFormat: options.responseFormat,
+      },
+      makeIdempotencyKey('chat'),
+      { signal: (options as any).signal }
+    );
+    return result.content;
+  }
+  
+  // Legacy 直连：仅开发/迁移期兜底
+  console.warn('[Legacy] 使用直连适配器，建议迁移到网关模型');
+  return legacyCallChatApi(options, activeModel);
 };
 

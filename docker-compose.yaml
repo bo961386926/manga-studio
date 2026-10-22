@@ -57,6 +57,8 @@ services:
       - REQUEST_HMAC_KEY=${REQUEST_HMAC_KEY:?REQUEST_HMAC_KEY must be set in .env}
       - EMAIL_DELIVERY_KEY=${EMAIL_DELIVERY_KEY:?EMAIL_DELIVERY_KEY must be set in .env}
       - IP_HMAC_SALT=${IP_HMAC_SALT:?IP_HMAC_SALT must be set in .env}
+      # 媒体文件持久化目录（对应 media-store 卷），容器重建不丢失
+      - MEDIA_STORAGE_DIR=/app/media-store
       # 仅本地开发逃生阀：EMAIL_VERIFICATION_DISABLED 跳过邮箱验证（重复注册＝改密码）；
       # RATE_LIMIT_DISABLED 旁路限流。生产 .env 两者都必须保持 false！
       # Cookie Secure 开关：HTTP 过渡期在 .env 设 COOKIE_SECURE=false（见 session.js）
@@ -84,6 +86,7 @@ services:
       - BACKUP_AGE_RECIPIENT=${BACKUP_AGE_RECIPIENT:-}
     volumes:
       - backups:/app/backups
+      - media-store:/app/media-store
     depends_on:
       postgres:
         condition: service_healthy
@@ -121,7 +124,7 @@ services:
     image: manga-studio:latest
     container_name: manga-studio-app
     ports:
-      - "3005:80"
+      - "${BIND_ADDR:-127.0.0.1}:3005:80"
     environment:
       - NODE_ENV=production
     depends_on:
@@ -140,6 +143,7 @@ services:
 volumes:
   pgdata:
   backups:
+  media-store:
 
 networks:
   manga-studio-network:

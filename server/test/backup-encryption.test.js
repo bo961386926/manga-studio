@@ -20,7 +20,7 @@ describe('encryptBackup', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  test('calls age with recipient and output file, removes plaintext on success', () => {
+  test('calls age with recipient and output file, verifies decrypt, then removes plaintext on success', () => {
     const plain = path.join(dir, 'manga_studio-20260929-010101.dump');
     fs.writeFileSync(plain, 'fake pg_dump payload');
     const calls = [];
@@ -33,9 +33,12 @@ describe('encryptBackup', () => {
 
     const out = encryptBackup(plain, 'age1test recipient', runner);
 
-    assert.equal(calls.length, 1);
+    // 2 次调用：1) 加密  2) 验证解密
+    assert.equal(calls.length, 2);
     assert.equal(calls[0].bin, 'age');
     assert.deepEqual(calls[0].args, ['-r', 'age1test recipient', '-o', `${plain}.age`, plain]);
+    assert.equal(calls[1].bin, 'age');
+    assert.deepEqual(calls[1].args, ['-d', '-r', 'age1test recipient', '-o', '/dev/null', `${plain}.age`]);
     assert.equal(out, `${plain}.age`);
     assert.equal(fs.existsSync(plain), false, 'plaintext must be removed after successful encryption');
     assert.equal(fs.existsSync(`${plain}.age`), true);

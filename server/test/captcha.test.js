@@ -46,6 +46,13 @@ test('captcha: endpoint issues SVG challenge when enabled', async () => {
     assert.equal(body.enabled, true);
     assert.ok(body.captchaId, 'captchaId present');
     assert.match(body.svg, /<svg/);
+    // --- 新增：验证码真实现断言 ---
+    const { _peekAnswer } = await import('../auth/captcha.js');
+    const answer = _peekAnswer(body.captchaId);
+    assert.ok(!/<text/i.test(body.svg), 'SVG must not contain <text> elements (answer leakage)');
+    assert.ok(!body.svg.includes(answer), 'answer must not appear in SVG');
+    const pathCount = (body.svg.match(/<path /g) || []).length;
+    assert.ok(pathCount >= 4, `expected >= 4 <path> elements, got ${pathCount}`);
   } finally {
     server.close();
   }

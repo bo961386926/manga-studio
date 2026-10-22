@@ -58,15 +58,9 @@ export const parseCookies = (req) => {
 
 // ---------- CORS allowlist ----------
 
-export const getAllowedOrigins = () =>
-  (process.env.CORS_ORIGINS || (
-    process.env.NODE_ENV === 'production'
-      ? ''
-      : 'http://localhost:3000,http://localhost:5173'
-  ))
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean);
+import { getAllowedOrigins as getAllowedOriginsConfig } from '../config/env.js';
+
+export const getAllowedOrigins = getAllowedOriginsConfig;
 
 export const corsAllowlist = (req, res, next) => {
   const origin = req.get('origin');

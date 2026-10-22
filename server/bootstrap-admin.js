@@ -7,14 +7,22 @@ import { pool, withTransaction, getConfig } from './db.js';
 import { normalizeEmail } from './auth/password.js';
 import { hashToken, randomToken } from './auth/tokens.js';
 import { recordAudit } from './auth/audit.js';
+import { SERVER_CONFIG } from './config/env.js';
 
 const ADVISORY_LOCK_KEY = 7273100001; // 'MSBOOTS' numeric
+
+function getPublicAppUrl() {
+  const url = process.env.PUBLIC_APP_URL;
+  if (url) return url.replace(/\/$/, '');
+  // 开发环境默认
+  return `http://${SERVER_CONFIG.API_HOST}:${SERVER_CONFIG.PORT}`;
+}
 
 export const createBootstrapToken = async ({ email }) => {
   const normalized = normalizeEmail(email);
   if (!normalized) throw new Error('invalid email address');
   const token = randomToken(32);
-  const base = (process.env.PUBLIC_APP_URL || 'http://localhost:3001').replace(/\/$/, '');
+  const base = getPublicAppUrl();
   const setupUrl = `${base}/#/bootstrap?token=${encodeURIComponent(token)}`;
   await withTransaction(async (client) => {
     const { rows } = await client.query(

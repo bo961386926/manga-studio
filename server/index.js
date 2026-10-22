@@ -39,15 +39,40 @@ import { notificationsRouter } from './routes/notifications.js';
 import { creditsRouter } from './routes/credits.js';
 import { paymentsRouter, adminPaymentsRouter } from './routes/payments.js';
 import { startBackupScheduler } from './backup.js';
+import { SERVER_CONFIG, getAllowedOrigins } from './config/env.js';
+import { metricsHandler, recordHttpRequest } from './metrics.js';
+import { logger, createRequestLogger, logHttpRequest } from './logger.js';
 
 const app = express();
-const PORT = parseInt(process.env.SERVER_PORT || '3001');
+const PORT = SERVER_CONFIG.PORT;
 
 // Exactly one trusted proxy hop (nginx): req.ip is the real client address,
 // so rate limits and IP audit hashes do not collapse onto the proxy IP.
 app.set('trust proxy', 1);
 
 app.use(requestId);
+
+// Request logging middleware with structured logs
+app.use((req, res, next) => {
+  const start = Date.now();
+  req.log = createRequestLogger(req);
+  
+  res.on('finish', () => {
+    const durationMs = Date.now() - start;
+    recordHttpRequest(req.method, req.path, res.statusCode, durationMs);
+    logHttpRequest(req.log, {
+      method: req.method,
+      path: req.path,
+      statusCode: res.statusCode,
+      durationMs,
+      userId: req.user?.user_id,
+      ip: req.ip,
+    });
+  });
+  
+  next();
+});
+
 app.use(securityHeaders);
 app.use(corsAllowlist);
 // Per-route JSON body limits: small by default, larger only where payloads
@@ -79,7 +104,7 @@ app.get('/api/announcements/active', async (req, res) => {
     );
     res.json({ announcements: rows });
   } catch (e) {
-    console.error('[API] announcements error:', e.message);
+    req.log.error({ err: e }, '[API] announcements error');
     res.status(500).json({ error: e.message });
   }
 });
@@ -91,7 +116,7 @@ app.get('/api/projects', wrap(requireUser), async (req, res) => {
     const projects = await getProjectMetaList(req.user.user_id);
     res.json(projects);
   } catch (e) {
-    console.error('[API] getAllProjects error:', e);
+    req.log.error({ err: e }, '[API] getAllProjects error');
     res.status(500).json({ error: e.message });
   }
 });
@@ -102,7 +127,7 @@ app.get('/api/projects/:id', wrap(requireUser), async (req, res) => {
     if (!project) return res.status(404).json({ error: 'Project not found' });
     res.json(project);
   } catch (e) {
-    console.error('[API] getProject error:', e);
+    req.log.error({ err: e }, '[API] getProject error');
     res.status(500).json({ error: e.message });
   }
 });
@@ -115,16 +140,16 @@ app.post('/api/projects', wrap(requireUser), wrap(csrfProtection), async (req, r
     const title = data.title || '(untitled)';
     const shotsCount = Array.isArray(data.shots) ? data.shots.length : 0;
     const renderLogsCount = Array.isArray(data.renderLogs) ? data.renderLogs.length : 0;
-    console.log(`[API] saveProject - id: ${id}, title: "${title}", payload: ${(payloadSize / 1024 / 1024).toFixed(2)}MB, shots: ${shotsCount}, renderLogs: ${renderLogsCount}`);
+    req.log.info({ id, title, payloadSizeMB: (payloadSize / 1024 / 1024).toFixed(2), shotsCount, renderLogsCount }, '[API] saveProject');
     const existed = await pool.query(`SELECT 1 FROM projects WHERE user_id = $1 AND id = $2`, [req.user.user_id, id]);
     await saveProject(req.user.user_id, id, { id, ...data });
     if (existed.rowCount === 0) {
       await trackEvent({ userId: req.user.user_id, event: 'project_created', props: { projectId: id } });
     }
-    console.log(`[API] saveProject - 保存成功: ${id}`);
+    req.log.info({ id }, '[API] saveProject success');
     res.json({ success: true });
   } catch (e) {
-    console.error('[API] saveProject error:', e);
+    req.log.error({ err: e }, '[API] saveProject error');
     res.status(500).json({ error: e.message });
   }
 });
@@ -136,7 +161,7 @@ app.delete('/api/projects/:id', wrap(requireUser), wrap(csrfProtection), async (
     await deleteProject(req.user.user_id, req.params.id);
     res.json({ success: true });
   } catch (e) {
-    console.error('[API] deleteProject error:', e);
+    req.log.error({ err: e }, '[API] deleteProject error');
     res.status(500).json({ error: e.message });
   }
 });
@@ -148,7 +173,7 @@ app.get('/api/assets', wrap(requireUser), async (req, res) => {
     const assets = await getAllAssets(req.user.user_id);
     res.json(assets);
   } catch (e) {
-    console.error('[API] getAllAssets error:', e);
+    req.log.error({ err: e }, '[API] getAllAssets error');
     res.status(500).json({ error: e.message });
   }
 });
@@ -160,7 +185,7 @@ app.post('/api/assets', wrap(requireUser), wrap(csrfProtection), async (req, res
     await saveAsset(req.user.user_id, id, { id, ...data });
     res.json({ success: true });
   } catch (e) {
-    console.error('[API] saveAsset error:', e);
+    req.log.error({ err: e }, '[API] saveAsset error');
     res.status(500).json({ error: e.message });
   }
 });
@@ -172,7 +197,7 @@ app.delete('/api/assets/:id', wrap(requireUser), wrap(csrfProtection), async (re
     await deleteAsset(req.user.user_id, req.params.id);
     res.json({ success: true });
   } catch (e) {
-    console.error('[API] deleteAsset error:', e);
+    req.log.error({ err: e }, '[API] deleteAsset error');
     res.status(500).json({ error: e.message });
   }
 });
@@ -190,7 +215,7 @@ app.get('/api/user/settings/:key', wrap(requireUser), async (req, res) => {
     if (value === null) return res.status(404).json({ error: 'Setting not found' });
     res.json(value);
   } catch (e) {
-    console.error('[API] getUserSetting error:', e);
+    req.log.error({ err: e }, '[API] getUserSetting error');
     res.status(500).json({ error: e.message });
   }
 });
@@ -201,7 +226,7 @@ app.put('/api/user/settings/:key', wrap(requireUser), wrap(csrfProtection), asyn
     await setUserSetting(req.user.user_id, req.params.key, req.body?.value);
     res.json({ success: true });
   } catch (e) {
-    console.error('[API] setUserSetting error:', e);
+    req.log.error({ err: e }, '[API] setUserSetting error');
     res.status(500).json({ error: e.message });
   }
 });
@@ -212,7 +237,7 @@ app.delete('/api/user/settings/:key', wrap(requireUser), wrap(csrfProtection), a
     await removeUserSetting(req.user.user_id, req.params.key);
     res.json({ success: true });
   } catch (e) {
-    console.error('[API] removeUserSetting error:', e);
+    req.log.error({ err: e }, '[API] removeUserSetting error');
     res.status(500).json({ error: e.message });
   }
 });
@@ -224,7 +249,7 @@ app.get('/api/admin/system-settings/:key', wrap(requireUser), wrap(requireAdmin)
     if (value === null) return res.status(404).json({ error: 'Setting not found' });
     res.json(value);
   } catch (e) {
-    console.error('[API] getSystemSetting error:', e);
+    req.log.error({ err: e }, '[API] getSystemSetting error');
     res.status(500).json({ error: e.message });
   }
 });
@@ -240,7 +265,7 @@ app.put(
       await setSystemSetting(req.params.key, req.body?.value);
       res.json({ success: true });
     } catch (e) {
-      console.error('[API] setSystemSetting error:', e);
+      req.log.error({ err: e }, '[API] setSystemSetting error');
       res.status(500).json({ error: e.message });
     }
   }
@@ -257,7 +282,7 @@ app.delete(
       await removeSystemSetting(req.params.key);
       res.json({ success: true });
     } catch (e) {
-      console.error('[API] removeSystemSetting error:', e);
+      req.log.error({ err: e }, '[API] removeSystemSetting error');
       res.status(500).json({ error: e.message });
     }
   }
@@ -274,6 +299,10 @@ app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', time: Date.now() });
 });
 
+// ==================== Metrics (Prometheus) ====================
+
+app.get('/metrics', metricsHandler);
+
 // ==================== Start ====================
 
 export const startServer = () => {
@@ -283,11 +312,11 @@ export const startServer = () => {
       startBackupScheduler();
       startNotificationScheduler();
       app.listen(PORT, () => {
-        console.log(`[Server] API server running on http://localhost:${PORT}`);
+        logger.info(`API server running on http://localhost:${PORT}`);
       });
     })
     .catch((err) => {
-      console.error('[Server] Failed to initialize database:', err);
+      logger.error({ err }, 'Failed to initialize database');
       process.exit(1);
     });
 };

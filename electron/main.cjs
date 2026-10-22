@@ -5,6 +5,17 @@ const http = require('http');
 const crypto = require('crypto');
 const fs = require('fs');
 
+// 统一环境变量配置（CommonJS 兼容）
+function getEnv(key, fallback) {
+  if (process.env[key]) return process.env[key];
+  return fallback;
+}
+function getEnvInt(key, fallback) {
+  const val = getEnv(key, String(fallback));
+  const parsed = parseInt(val, 10);
+  return Number.isNaN(parsed) ? fallback : parsed;
+}
+
 function getDistRoot() {
   if (process.env.NODE_ENV === 'development' || !app.isPackaged) {
     return path.join(__dirname, '../dist');
@@ -12,12 +23,25 @@ function getDistRoot() {
   return path.join(process.resourcesPath, 'app.asar.unpacked', 'dist');
 }
 
-const DEFAULT_PORT = 39628;
+const DEFAULT_PORT = getEnvInt('ELECTRON_PORT', 39628);
 
 let mainWindow = null;
 let server = null;
 
 function createWindow(port) {
+  const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
+  
+  // Remote HTTPS deployment: when REMOTE_APP_URL is set, load the remote Web
+  // app instead of the bundled dist (stage-3 gate). webSecurity stays on.
+  const remoteUrl = process.env.REMOTE_APP_URL;
+  const url = remoteUrl
+    ? new URL(remoteUrl).href
+    : `http://localhost:${port}/`;
+  
+  // webSecurity: true 仅在加载 HTTPS 远程地址时生效
+  // 本地开发加载 http://localhost 必须关闭，否则 CSP 会阻止混合内容/不安全上下文
+  const webSecurity = remoteUrl ? true : false;
+
   const win = new BrowserWindow({
     width: 1400,
     height: 900,
@@ -27,18 +51,12 @@ function createWindow(port) {
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: true,
-      webSecurity: true,
+      webSecurity,
       preload: path.join(__dirname, 'preload.cjs'),
     },
     show: false,
   });
 
-  // Remote HTTPS deployment: when REMOTE_APP_URL is set, load the remote Web
-  // app instead of the bundled dist (stage-3 gate). webSecurity stays on.
-  const remoteUrl = process.env.REMOTE_APP_URL;
-  const url = remoteUrl
-    ? new URL(remoteUrl).href
-    : `http://localhost:${port}/`;
   win.loadURL(url);
   win.once('ready-to-show', () => win.show());
   win.on('closed', () => { mainWindow = null; });

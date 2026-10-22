@@ -7,6 +7,7 @@
 //   - 容器内调度（server/backup.js spawn，cwd=/app，compose 挂载 backups 卷）→ /app/backups/
 // BACKUP_AGE_RECIPIENT（age 公钥）设置后，备份自动加密为 .dump.age 并删除明文；
 // 加密失败整体失败，绝不留下明文伪装成功。
+// 生产环境（NODE_ENV=production）必须设置 BACKUP_AGE_RECIPIENT，否则拒绝备份（防明文落盘）。
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -15,6 +16,7 @@ import { encryptBackup } from './backup-encrypt.js';
 
 const BACKUP_DIR = process.env.BACKUP_DIR || path.join(process.cwd(), 'backups');
 const KEEP = parseInt(process.env.BACKUP_KEEP || '14', 10);
+const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 
 const stamp = () => {
   const d = new Date();
@@ -41,25 +43,39 @@ const run = () => {
   const env = { ...process.env };
   if (process.env.DB_PASSWORD) env.PGPASSWORD = process.env.DB_PASSWORD;
 
-  execFileSync('pg_dump', args, { env, stdio: 'inherit' });
+  // pg_dump: 失败时清理残留文件，不留下半截 dump
+  try {
+    execFileSync('pg_dump', args, { env, stdio: 'inherit' });
+  } catch (err) {
+    // 删除可能已创建的空/半截文件
+    try { fs.rmSync(file, { force: true }); } catch {}
+    throw err;
+  }
+
   const sizeMB = (fs.statSync(file).size / 1024 / 1024).toFixed(2);
   console.log(`[backup] OK: ${file} (${sizeMB} MB)`);
 
-  // 可选加密：设置 BACKUP_AGE_RECIPIENT 时用 age 公钥加密，成功后删除明文。
+  // 加密：设置 BACKUP_AGE_RECIPIENT 时用 age 公钥加密，成功后删除明文。
   let finalFile = file;
   const recipient = process.env.BACKUP_AGE_RECIPIENT;
   if (recipient && recipient.trim()) {
     finalFile = encryptBackup(file, recipient);
     const encMB = (fs.statSync(finalFile).size / 1024 / 1024).toFixed(2);
     console.log(`[backup] encrypted: ${finalFile} (${encMB} MB)`);
+  } else if (IS_PRODUCTION) {
+    // 生产环境强制加密：未配置 age 公钥直接报错，防止明文落盘 PII
+    try { fs.rmSync(file, { force: true }); } catch {}
+    throw new Error('BACKUP_AGE_RECIPIENT is required in production (NODE_ENV=production) — backup would contain user PII in plaintext');
   } else {
     console.warn('[backup] WARNING: BACKUP_AGE_RECIPIENT not set — backup stored as PLAINTEXT (contains user PII)');
   }
 
-  // Rotate: keep only the newest KEEP files (plain or encrypted).
+  // Rotate: keep only the newest KEEP files.
+  // 生产只保留 .age（加密后）；开发两类都保留
+  const extFilter = IS_PRODUCTION ? (f) => f.endsWith('.dump.age') : (f) => f.endsWith('.dump') || f.endsWith('.dump.age');
   const files = fs
     .readdirSync(BACKUP_DIR)
-    .filter((f) => f.endsWith('.dump') || f.endsWith('.dump.age'))
+    .filter(extFilter)
     .sort()
     .reverse();
   for (const old of files.slice(KEEP)) {

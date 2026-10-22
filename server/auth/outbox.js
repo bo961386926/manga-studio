@@ -5,6 +5,7 @@ import crypto from 'node:crypto';
 import nodemailer from 'nodemailer';
 import { pool } from '../db.js';
 import { randomToken } from './tokens.js';
+import { SERVER_CONFIG } from '../config/env.js';
 
 const MAX_ATTEMPTS = 5;
 const BACKOFF_BASE_MS = 60 * 1000;
@@ -22,6 +23,13 @@ const deliveryKey = () => {
   }
   return crypto.createHash('sha256').update(raw || 'dev-only-delivery-key-do-not-use-in-prod').digest();
 };
+
+function getPublicAppUrl() {
+  const url = process.env.PUBLIC_APP_URL;
+  if (url) return url.replace(/\/$/, '');
+  // 开发环境默认
+  return `http://${SERVER_CONFIG.API_HOST}:${SERVER_CONFIG.PORT}`;
+}
 
 export const sealActionToken = ({ outboxId, userId, purpose, actionTokenId, token }) => {
   const iv = crypto.randomBytes(12);
@@ -74,7 +82,7 @@ export const queueEmail = async (
 // ---------- templates ----------
 
 const actionUrl = (path, token) => {
-  const base = (process.env.PUBLIC_APP_URL || 'http://localhost:3001').replace(/\/$/, '');
+  const base = getPublicAppUrl();
   // Token travels in the URL fragment so it never reaches the server via logs.
   return `${base}/#${path}?token=${encodeURIComponent(token)}`;
 };

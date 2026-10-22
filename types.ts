@@ -73,7 +73,7 @@ export interface Shot {
   characterVariations?: { [characterId: string]: string };
   keyframes: Keyframe[];
   interval?: VideoInterval;
-  videoModel?: 'veo' | 'sora-2' | 'veo_3_1_t2v_fast_landscape' | 'veo_3_1_t2v_fast_portrait' | 'veo_3_1_i2v_s_fast_fl_landscape' | 'veo_3_1_i2v_s_fast_fl_portrait';
+  videoModel?: string; // 统一使用字符串，具体模型 ID 由网关解析
 }
 
 export interface ScriptData {
@@ -132,47 +132,41 @@ export interface ProjectState {
   renderLogs: RenderLog[];
 }
 
-export type AspectRatio = '16:9' | '9:16' | '1:1';
+// Re-export model-related types from types/model.ts (single source of truth)
+export type {
+  AspectRatio,
+  VideoDuration,
+  ModelProvider,
+  ModelDefinition,
+  ModelDefinitionBase,
+  ChatModelDefinition,
+  ImageModelDefinition,
+  VideoModelDefinition,
+  ModelParams,
+  ChatModelParams,
+  ImageModelParams,
+  VideoModelParams,
+  ModelType,
+  ActiveModels,
+  ModelRegistryState,
+  ChatOptions,
+  ImageGenerateOptions,
+  VideoGenerateOptions,
+  VideoMode,
+} from './types/model';
 
-export type VideoDuration = 4 | 8 | 12;
-
-export interface ModelProvider {
-  id: string;
-  name: string;
-  baseUrl: string;
-  apiKey?: string;
-  isDefault?: boolean;
-  isBuiltIn?: boolean;
-}
-
-export interface ChatModelConfig {
-  providerId: string;
-  modelName: string;
-  endpoint?: string;
-}
-
-export interface ImageModelConfig {
-  providerId: string;
-  modelName: string;
-  endpoint?: string;
-}
-
-export interface VideoModelConfig {
-  providerId: string;
-  type: 'sora' | 'veo';
-  modelName: string;
-  endpoint?: string;
-}
-
-export interface ModelConfig {
-  chatModel: ChatModelConfig;
-  imageModel: ImageModelConfig;
-  videoModel: VideoModelConfig;
-}
-
-export interface ModelManagerState {
-  providers: ModelProvider[];
-  currentConfig: ModelConfig;
-  defaultAspectRatio: AspectRatio;
-  defaultVideoDuration: VideoDuration;
-}
+// Re-export constants
+export {
+  DEFAULT_CHAT_PARAMS,
+  DEFAULT_IMAGE_PARAMS,
+  DEFAULT_VIDEO_PARAMS_VEO,
+  DEFAULT_VIDEO_PARAMS_SORA,
+  DEFAULT_VIDEO_PARAMS_DOUBAO,
+  BUILTIN_CHAT_MODELS,
+  BUILTIN_IMAGE_MODELS,
+  BUILTIN_VIDEO_MODELS,
+  BUILTIN_PROVIDERS,
+  ALL_BUILTIN_MODELS,
+  DEFAULT_CHAT_MODEL,
+  DEFAULT_ACTIVE_MODELS,
+} from './types/model';

@@ -77,6 +77,7 @@ test('development defaults allow the actual Vite ports when CORS is unset', () =
     assert.deepEqual(getAllowedOrigins(), [
       'http://localhost:3000',
       'http://localhost:5173',
+      'http://localhost:3005',
     ]);
   } finally {
     process.env.CORS_ORIGINS = previousOrigins;

@@ -2,21 +2,48 @@
 # 一键部署：预检 .env 生产门 → 构建镜像 → 起容器 → 等健康 → 冒烟验证。
 # 失败时自动回滚到 :previous 镜像（首次部署无 previous 则只报错不回滚）。
 #
-# 用法：./scripts/deploy.sh [--skip-preflight]
+# 用法：./scripts/deploy.sh [--skip-preflight] [--tls]
+#   --tls          同时加载 docker-compose.tls.yaml（发布 80/443）
 # 前提：仓库根有 .env（生产值），Docker 与 docker compose v2 可用。
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-COMPOSE="docker compose --env-file .env"
+
+COMPOSE_FILES=("--env-file" ".env")
+if [[ "${1:-}" == "--tls" ]] || [[ "${2:-}" == "--tls" ]]; then
+  COMPOSE_FILES+=("-f" "docker-compose.yaml" "-f" "docker-compose.tls.yaml")
+else
+  COMPOSE_FILES+=("-f" "docker-compose.yaml")
+fi
+COMPOSE="docker compose ${COMPOSE_FILES[*]}"
+
 API_CONTAINER=manga-studio-api
 APP_CONTAINER=manga-studio-app
+
+# 安全解析 .env（不执行其中的命令替换）
+parse_env() {
+  while IFS='=' read -r k v; do
+    [[ -z "$k" ]] && continue
+    [[ "$k" =~ ^#.*$ ]] && continue
+    [[ "$k" =~ ^[A-Z_][A-Z0-9_]*$ ]] || continue
+    # 去除行尾注释与首尾空白
+    v="${v%%#*}"
+    v="${v% }"
+    export "$k=$v"
+  done < .env
+}
+
+# 统一从 .env 读取端口，避免硬编码漂移
+parse_env
 PUBLIC_PORT="${PUBLIC_PORT:-3005}"   # frontend nginx 宿主端口（见 compose）
+
 SKIP_PREFLIGHT=false
 PREFLIGHT_ONLY=false
 for arg in "$@"; do
   case "$arg" in
     --skip-preflight) SKIP_PREFLIGHT=true ;;
     --preflight-only) PREFLIGHT_ONLY=true ;;
+    --tls) ;;  # 已在开头处理
   esac
 done
 
@@ -28,8 +55,7 @@ die()  { printf '\033[1;31m[fail]\033[0m %s\n' "$*" >&2; exit 1; }
 if [ "$SKIP_PREFLIGHT" = false ]; then
   say "预检 .env 生产门…"
   [ -f .env ] || die "缺 .env（参考 .env.production.example）"
-  # shellcheck disable=SC1091
-  set -a; source .env; set +a
+  parse_env
 
   need() { [ -n "${!1:-}" ] || die ".env 缺必填项 $1"; }
   need POSTGRES_PASSWORD; need CORS_ORIGINS; need PUBLIC_APP_URL
@@ -42,6 +68,13 @@ if [ "$SKIP_PREFLIGHT" = false ]; then
   grep -q '^EMAIL_VERIFICATION_DISABLED=false' .env || die "生产必须 EMAIL_VERIFICATION_DISABLED=false（邮箱验证不可旁路）"
   grep -q '^RATE_LIMIT_DISABLED=false' .env || die "生产必须 RATE_LIMIT_DISABLED=false（限流不可旁路）"
   [ "${#POSTGRES_PASSWORD}" -ge 12 ] || die "POSTGRES_PASSWORD 至少 12 位"
+
+  # 验证 4 个 32 字节 hex 密钥（64 位小写十六进制）
+  for k in MODEL_ENC_KEY REQUEST_HMAC_KEY EMAIL_DELIVERY_KEY IP_HMAC_SALT; do
+    val="${!k}"
+    [[ "$val" =~ ^[0-9a-f]{64}$ ]] || die "$k 必须是 64 位小写十六进制 (openssl rand -hex 32)"
+  done
+
   [ -n "${BACKUP_AGE_RECIPIENT:-}" ] || say "警告：未设 BACKUP_AGE_RECIPIENT，备份将明文存储（含 PII，强烈建议 age 加密）"
   ok "预检通过"
   [ "$PREFLIGHT_ONLY" = true ] && { ok "--preflight-only：到此为止，不构建不部署"; exit 0; }
@@ -82,8 +115,9 @@ ok "API healthy"
 
 # ---------- 4. 冒烟 ----------
 say "冒烟验证…"
-curl -fsS "http://localhost:${PUBLIC_PORT}/api/health" >/dev/null || die "GET /api/health 失败"
-curl -fsS -o /dev/null "http://localhost:${PUBLIC_PORT}/" || die "前端首页返回失败"
+# 使用 PUBLIC_APP_URL 进行健康检查，支持 TLS 形态
+curl -fsS "${PUBLIC_APP_URL%/}/api/health" >/dev/null || die "GET /api/health 失败"
+curl -fsS -o /dev/null "${PUBLIC_APP_URL%/}/" || die "前端首页返回失败"
 ok "冒烟通过：/api/health 200，前端 200"
 
 # ---------- 5. 汇总 ----------

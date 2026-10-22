@@ -1,8 +1,9 @@
-// Self-hosted SVG captcha for login/register bot friction ("防君子" tier).
+// Self-hosted SVG captcha for login/register bot friction.
 // Zero dependencies: hand-rolled distorted-glyph SVG + in-memory single-use
 // store. CAPTCHA_ENABLED is read per-request (not at import) so tests and
 // staged rollouts can toggle it via env; production .env sets it to 'true'.
 import crypto from 'node:crypto';
+import { getGlyphPaths, ALL_GLYPHS } from './glyphPaths.js';
 
 const CHARSET = 'abcdefghjkmnpqrstuvwxyz23456789'; // 排除 0O1lI 易混淆字符
 const CODE_LENGTH = 4;
@@ -24,33 +25,76 @@ const randomBetween = (min, max) => min + Math.random() * (max - min);
 
 const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
 
-// 扭曲字符 SVG：随机旋转/字号/颜色 + 干扰线与噪点，防止最基础的 OCR。
+// 渲染扭曲字形为 SVG path（无 <text> 元素，答案不以明文出现）
 const renderSvg = (code) => {
   const width = 132;
   const height = 44;
   const palette = ['#0f766e', '#1d4ed8', '#7c3aed', '#b45309', '#be123c'];
   const step = width / (CODE_LENGTH + 1);
+
+  // 全局扰动滤镜：破坏骨架匹配
+  const filterDef = `
+    <filter id="w" x="-20%" y="-20%" width="140%" height="140%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.045" numOctaves="2" result="noise"/>
+      <feDisplacementMap in="SourceGraphic" in2="noise" scale="2.6" xChannelSelector="R" yChannelSelector="G"/>
+    </filter>
+  `;
+
   const glyphs = code
     .split('')
     .map((ch, i) => {
-      const x = step * (i + 0.6) + randomBetween(-2, 2);
-      const y = height / 2 + randomBetween(4, 8);
-      const rotate = randomBetween(-24, 24).toFixed(1);
-      const fontSize = randomBetween(24, 30).toFixed(0);
-      return `<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" transform="rotate(${rotate} ${x.toFixed(1)} ${y.toFixed(1)})" font-family="Georgia, 'Times New Roman', serif" font-size="${fontSize}" font-weight="700" fill="${pick(palette)}" text-anchor="middle">${ch}</text>`;
+      const paths = getGlyphPaths(ch);
+      if (paths.length === 0) return '';
+      const cx = step * (i + 0.6) + randomBetween(-1, 1);
+      const cy = height / 2 + randomBetween(0, 4);
+      const rotate = randomBetween(-22, 22).toFixed(1);
+      const scale = randomBetween(0.85, 1.15).toFixed(2);
+      const skew = randomBetween(-6, 6).toFixed(1);
+      const color = pick(palette);
+      const strokeWidth = randomBetween(2.0, 2.8).toFixed(1);
+
+      const pathData = paths
+        .map(p => {
+          // 将 0..100 坐标映射到字形局部坐标系（约 40x40）
+          return p
+            .replace(/M(\d+) (\d+)/g, (_m, x, y) => `M${(x - 50) * 0.4} ${(y - 50) * 0.4}`)
+            .replace(/L(\d+) (\d+)/g, (_m, x, y) => `L${(x - 50) * 0.4} ${(y - 50) * 0.4}`)
+            .replace(/C(\d+) (\d+) (\d+) (\d+) (\d+) (\d+)/g,
+              (_m, x1, y1, x2, y2, x, y) =>
+                `C${(x1 - 50) * 0.4} ${(y1 - 50) * 0.4} ${(x2 - 50) * 0.4} ${(y2 - 50) * 0.4} ${(x - 50) * 0.4} ${(y - 50) * 0.4}`)
+            .replace(/Z/g, 'Z');
+        })
+        .join(' ');
+
+      return `
+        <g
+          transform="translate(${cx.toFixed(1)} ${cy.toFixed(1)}) rotate(${rotate}) scale(${scale}) skewX(${skew})"
+          fill="none"
+          stroke="${color}"
+          stroke-width="${strokeWidth}"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          filter="url(#w)"
+        >
+          <path d="${pathData}"/>
+        </g>
+      `;
     })
     .join('');
+
   const lines = Array.from({ length: 3 }, () => {
     const y1 = randomBetween(4, height - 4);
     const y2 = randomBetween(4, height - 4);
     return `<path d="M0 ${y1.toFixed(1)} C ${width / 3} ${(y1 - 10).toFixed(1)}, ${(width * 2) / 3} ${(y2 + 10).toFixed(1)}, ${width} ${y2.toFixed(1)}" stroke="${pick(palette)}" stroke-opacity="0.35" stroke-width="1.4" fill="none"/>`;
   }).join('');
+
   const dots = Array.from({ length: 24 }, () => {
     const cx = randomBetween(0, width).toFixed(1);
     const cy = randomBetween(0, height).toFixed(1);
     return `<circle cx="${cx}" cy="${cy}" r="${randomBetween(0.8, 1.8).toFixed(1)}" fill="${pick(palette)}" fill-opacity="0.3"/>`;
   }).join('');
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="captcha"><rect width="${width}" height="${height}" fill="#f8fafc"/>${lines}${dots}${glyphs}</svg>`;
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="captcha">${filterDef}<rect width="${width}" height="${height}" fill="#f8fafc"/>${lines}${dots}${glyphs}</svg>`;
 };
 
 // 签发新挑战：返回 { captchaId, svg }。
@@ -58,7 +102,7 @@ export const issueCaptcha = () => {
   const now = Date.now();
   prune(now);
   let answer = '';
-  for (let i = 0; i < CODE_LENGTH; i += 1) answer += pick(CHARSET.split(''));
+  for (let i = 0; i < CODE_LENGTH; i += 1) answer += pick(ALL_GLYPHS);
   const captchaId = crypto.randomUUID();
   store.set(captchaId, { answer, expiresAt: now + TTL_MS });
   return { captchaId, svg: renderSvg(answer) };
