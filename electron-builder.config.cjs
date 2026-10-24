@@ -42,16 +42,14 @@ const baseConfig = {
 };
 
 // Add mac config only when building for mac
+// Note: electron-builder schema validation requires mac config to be minimal on non-mac platforms
 if (process.platform === 'darwin' || process.argv.includes('--mac')) {
   baseConfig.mac = {
     target: ['dmg'],
     category: 'public.app-category.video',
-    hardenedRuntime: true,
-    gatekeeperAssess: true,
-    entitlements: 'build/entitlements.mac.plist',
-    entitlementsInherit: 'build/entitlements.mac.plist',
+    // Disable signing for CI builds without certificates
     dmg: {
-      sign: true,
+      sign: false,
     },
   };
 }
