@@ -201,7 +201,7 @@
               ]
             },
             "unit": "percent"
-          ],
+          },
           "overrides": []
         },
         "gridPos": {"h": 4, "w": 6, "x": 18, "y": 8},
@@ -240,7 +240,7 @@
               ]
             },
             "unit": "percent"
-          ],
+          },
           "overrides": []
         },
         "gridPos": {"h": 4, "w": 6, "x": 18, "y": 0},
@@ -273,7 +273,7 @@
             "mappings": [],
             "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
             "unit": "short"
-          ],
+          },
           "overrides": []
         },
         "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
@@ -312,7 +312,7 @@
             "mappings": [],
             "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
             "unit": "s"
-          ],
+          },
           "overrides": []
         },
         "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
