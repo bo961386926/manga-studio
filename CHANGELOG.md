@@ -58,6 +58,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 - **生产级仪表板**：13 面板自动配置，覆盖 HTTP、模型调用、积分、DB、Token、媒体、异步任务
 - **Alertmanager 路由**：critical/warning 分级、邮件+Webhook、抑制规则
 - **监控运维脚本**：`npm run monitoring:up/down/logs`
+- **Node Exporter 主机监控**：CPU/内存/磁盘/网络/负载 9 面板仪表板
+- **监控 CI 流水线**：Prometheus/Alertmanager/Grafana 配置校验 (`.github/workflows/monitoring-ci.yml`)
 
 ### Changed
 - 代码分割生效：主包 679kB → 281kB（manualChunks 10 个 chunk）
@@ -69,5 +71,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 ### Planned
 - 异地备份脚本真实上传测试（需配置 S3/MinIO 凭据）
 - Electron 签名/公证实际执行（需 Apple Developer 账号）
-- Node Exporter 主机级指标
+- RLS 非超级用户迁移生产执行
 - CI/CD 流水线完整跑通验证
+- 真实告警通道配置（SMTP/Webhook）

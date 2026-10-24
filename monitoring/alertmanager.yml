@@ -1,9 +1,9 @@
 global:
   resolve_timeout: 5m
-  smtp_smarthost: 'smtp.gmail.com:587'
-  smtp_from: 'alerts@manga-studio.local'
-  smtp_auth_username: 'alerts@manga-studio.local'
-  smtp_auth_password: '${SMTP_PASSWORD}'
+  smtp_smarthost: '${ALERTMANAGER_SMTP_HOST:-smtp.gmail.com:587}'
+  smtp_from: '${ALERTMANAGER_SMTP_FROM:-alerts@manga-studio.local}'
+  smtp_auth_username: '${ALERTMANAGER_SMTP_USER:-alerts@manga-studio.local}'
+  smtp_auth_password: '${ALERTMANAGER_SMTP_PASSWORD}'
 
 route:
   group_by: ['alertname', 'severity']
@@ -23,24 +23,23 @@ route:
 receivers:
   - name: 'default'
     email_configs:
-      - to: 'ops@manga-studio.local'
+      - to: '${ALERTMANAGER_DEFAULT_EMAIL:-ops@manga-studio.local}'
         send_resolved: true
-    # webhook for Slack/DingTalk/etc
     webhook_configs:
-      - url: 'http://host.docker.internal:5000/webhook/alerts'
+      - url: '${ALERTMANAGER_WEBHOOK_DEFAULT:-http://host.docker.internal:5000/webhook/alerts}'
         send_resolved: true
 
   - name: 'critical'
     email_configs:
-      - to: 'oncall@manga-studio.local'
+      - to: '${ALERTMANAGER_CRITICAL_EMAIL:-oncall@manga-studio.local}'
         send_resolved: true
     webhook_configs:
-      - url: 'http://host.docker.internal:5000/webhook/alerts-critical'
+      - url: '${ALERTMANAGER_WEBHOOK_CRITICAL:-http://host.docker.internal:5000/webhook/alerts-critical}'
         send_resolved: true
 
   - name: 'warning'
     email_configs:
-      - to: 'team@manga-studio.local'
+      - to: '${ALERTMANAGER_WARNING_EMAIL:-team@manga-studio.local}'
         send_resolved: true
 
 inhibit_rules:
