@@ -38,10 +38,15 @@ const baseConfig = {
 };
 
 // Add mac config only when building for mac
-// Minimal config to avoid schema validation issues
 if (process.platform === 'darwin' || process.argv.includes('--mac')) {
   baseConfig.mac = {
     target: ['dmg'],
+    // Disable code signing for CI builds without certificates
+    // forceCodeSigning: false prevents electron-builder from attempting to sign
+    forceCodeSigning: false,
+    dmg: {
+      sign: false,
+    },
   };
 }
 
