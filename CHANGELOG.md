@@ -50,9 +50,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 ---
 
+## [0.1.1] - 2026-10-24
+
+### Added
+- **全栈监控栈**：Prometheus + Grafana + Alertmanager (`docker compose --profile monitoring up -d`)
+- **20+ 告警规则**：API 可用性/延迟/错误率、模型网关失败率/延迟/队列积压、积分余额/扣费、数据库连接池/查询延迟、备份状态
+- **生产级仪表板**：13 面板自动配置，覆盖 HTTP、模型调用、积分、DB、Token、媒体、异步任务
+- **Alertmanager 路由**：critical/warning 分级、邮件+Webhook、抑制规则
+- **监控运维脚本**：`npm run monitoring:up/down/logs`
+
+### Changed
+- 代码分割生效：主包 679kB → 281kB（manualChunks 10 个 chunk）
+
+---
+
 ## [Unreleased]
 
 ### Planned
-- 代码分割：`vite.config.ts` manualChunks 将主包 679kB 拆分
-- 异地备份脚本（需确认 RPO/RTO）
-- 文档：CONTRIBUTING.md / SECURITY.md
+- 异地备份脚本真实上传测试（需配置 S3/MinIO 凭据）
+- Electron 签名/公证实际执行（需 Apple Developer 账号）
+- Node Exporter 主机级指标
+- CI/CD 流水线完整跑通验证
