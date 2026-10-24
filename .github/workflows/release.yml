@@ -60,7 +60,7 @@ jobs:
         run: npm run build
 
       - name: Build Electron app
-        run: npx electron-builder ${{ matrix.electron_builder_args }} --config electron-builder.config.js --publish=always
+        run: npx electron-builder ${{ matrix.electron_builder_args }} --config electron-builder.config.cjs --publish=always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
