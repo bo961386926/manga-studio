@@ -1,0 +1,477 @@
+{
+  "dashboard": {
+    "annotations": {
+      "list": [
+        {
+          "builtIn": 1,
+          "datasource": "-- Grafana --",
+          "enable": true,
+          "hide": true,
+          "iconColor": "rgba(0, 211, 255, 1)",
+          "name": "Annotations & Alerts",
+          "type": "dashboard"
+        }
+      ]
+    },
+    "editable": true,
+    "gnetId": null,
+    "graphTooltip": 1,
+    "id": null,
+    "iteration": 1658765432109,
+    "links": [],
+    "liveNow": false,
+    "panels": [
+      {
+        "datasource": "Prometheus",
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "thresholds"},
+            "mappings": [
+              {"options": {"0": {"color": "red", "text": "DOWN"}, "1": {"color": "green", "text": "UP"}}, "type": "value"}
+            ],
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"color": "red", "value": null},
+                {"color": "green", "value": 1}
+              ]
+            },
+            "unit": "short"
+          },
+          "overrides": []
+        },
+        "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
+        "id": 1,
+        "options": {
+          "colorMode": "value",
+          "graphMode": "none",
+          "justifyMode": "auto",
+          "orientation": "auto",
+          "reduceOptions": {"values": false, "calcs": ["lastNotNull"], "fields": ""},
+          "textMode": "auto"
+        },
+        "pluginVersion": "11.1.0",
+        "targets": [
+          {
+            "expr": "up{job=\"manga-studio-api\"}",
+            "legendFormat": "API",
+            "refId": "A"
+          }
+        ],
+        "title": "API Status",
+        "type": "stat"
+      },
+      {
+        "datasource": "Prometheus",
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "palette-classic"},
+            "custom": {"lineWidth": 1},
+            "mappings": [],
+            "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+            "unit": "s"
+          },
+          "overrides": []
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 6, "y": 0},
+        "id": 2,
+        "options": {
+          "legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true},
+          "tooltip": {"mode": "single", "sort": "none"}
+        },
+        "pluginVersion": "11.1.0",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.50, sum(rate(manga_studio_http_request_duration_seconds_bucket[5m])) by (le, method, path))",
+            "legendFormat": "p50 {{method}} {{path}}",
+            "refId": "A"
+          },
+          {
+            "expr": "histogram_quantile(0.95, sum(rate(manga_studio_http_request_duration_seconds_bucket[5m])) by (le, method, path))",
+            "legendFormat": "p95 {{method}} {{path}}",
+            "refId": "B"
+          },
+          {
+            "expr": "histogram_quantile(0.99, sum(rate(manga_studio_http_request_duration_seconds_bucket[5m])) by (le, method, path))",
+            "legendFormat": "p99 {{method}} {{path}}",
+            "refId": "C"
+          }
+        ],
+        "title": "HTTP Request Latency (p50/p95/p99)",
+        "type": "timeseries"
+      },
+      {
+        "datasource": "Prometheus",
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "palette-classic"},
+            "custom": {"lineWidth": 1},
+            "mappings": [],
+            "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+            "unit": "reqps"
+          },
+          "overrides": []
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 18, "y": 0},
+        "id": 3,
+        "options": {
+          "legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true},
+          "tooltip": {"mode": "single", "sort": "none"}
+        },
+        "pluginVersion": "11.1.0",
+        "targets": [
+          {
+            "expr": "sum(rate(manga_studio_http_requests_total[5m])) by (method, path, status)",
+            "legendFormat": "{{method}} {{path}} {{status}}",
+            "refId": "A"
+          }
+        ],
+        "title": "HTTP Request Rate (req/s)",
+        "type": "timeseries"
+      },
+      {
+        "datasource": "Prometheus",
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "palette-classic"},
+            "custom": {"lineWidth": 1},
+            "mappings": [],
+            "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+            "unit": "s"
+          },
+          "overrides": []
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+        "id": 4,
+        "options": {
+          "legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true},
+          "tooltip": {"mode": "single", "sort": "none"}
+        },
+        "pluginVersion": "11.1.0",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.50, sum(rate(manga_studio_model_invocation_duration_seconds_bucket[5m])) by (le, operation))",
+            "legendFormat": "p50 {{operation}}",
+            "refId": "A"
+          },
+          {
+            "expr": "histogram_quantile(0.95, sum(rate(manga_studio_model_invocation_duration_seconds_bucket[5m])) by (le, operation))",
+            "legendFormat": "p95 {{operation}}",
+            "refId": "B"
+          },
+          {
+            "expr": "histogram_quantile(0.99, sum(rate(manga_studio_model_invocation_duration_seconds_bucket[5m])) by (le, operation))",
+            "legendFormat": "p99 {{operation}}",
+            "refId": "C"
+          }
+        ],
+        "title": "Model Invocation Latency (p50/p95/p99)",
+        "type": "timeseries"
+      },
+      {
+        "datasource": "Prometheus",
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "palette-classic"},
+            "custom": {"lineWidth": 1},
+            "mappings": [],
+            "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+            "unit": "reqps"
+          },
+          "overrides": []
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+        "id": 5,
+        "options": {
+          "legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true},
+          "tooltip": {"mode": "single", "sort": "none"}
+        },
+        "pluginVersion": "11.1.0",
+        "targets": [
+          {
+            "expr": "sum(rate(manga_studio_model_invocations_total[5m])) by (operation, status)",
+            "legendFormat": "{{operation}} {{status}}",
+            "refId": "A"
+          }
+        ],
+        "title": "Model Invocation Rate",
+        "type": "timeseries"
+      },
+      {
+        "datasource": "Prometheus",
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "thresholds"},
+            "mappings": [],
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"color": "red", "value": null},
+                {"color": "yellow", "value": 10},
+                {"color": "green", "value": 50}
+              ]
+            },
+            "unit": "short"
+          },
+          "overrides": []
+        },
+        "gridPos": {"h": 4, "w": 6, "x": 24, "y": 8},
+        "id": 6,
+        "options": {
+          "colorMode": "value",
+          "graphMode": "none",
+          "justifyMode": "auto",
+          "orientation": "auto",
+          "reduceOptions": {"values": false, "calcs": ["lastNotNull"], "fields": ""},
+          "textMode": "auto"
+        },
+        "pluginVersion": "11.1.0",
+        "targets": [
+          {
+            "expr": "manga_studio_model_jobs_active{status=\"queued\"}",
+            "legendFormat": "Queued",
+            "refId": "A"
+          }
+        ],
+        "title": "Queued Async Jobs",
+        "type": "stat"
+      },
+      {
+        "datasource": "Prometheus",
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "palette-classic"},
+            "custom": {"lineWidth": 1},
+            "mappings": [],
+            "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+            "unit": "short"
+          },
+          "overrides": []
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+        "id": 7,
+        "options": {
+          "legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true},
+          "tooltip": {"mode": "single", "sort": "none"}
+        },
+        "pluginVersion": "11.1.0",
+        "targets": [
+          {
+            "expr": "manga_studio_model_jobs_active",
+            "legendFormat": "{{status}}",
+            "refId": "A"
+          }
+        ],
+        "title": "Async Job Status",
+        "type": "timeseries"
+      },
+      {
+        "datasource": "Prometheus",
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "palette-classic"},
+            "custom": {"lineWidth": 1},
+            "mappings": [],
+            "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+            "unit": "reqps"
+          },
+          "overrides": []
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+        "id": 8,
+        "options": {
+          "legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true},
+          "tooltip": {"mode": "single", "sort": "none"}
+        },
+        "pluginVersion": "11.1.0",
+        "targets": [
+          {
+            "expr": "sum(rate(manga_studio_credits_deducted_total[5m])) by (operation)",
+            "legendFormat": "{{operation}}",
+            "refId": "A"
+          },
+          {
+            "expr": "sum(rate(manga_studio_credits_refunded_total[5m])) by (operation)",
+            "legendFormat": "refund {{operation}}",
+            "refId": "B"
+          }
+        ],
+        "title": "Credits Deduction / Refund Rate",
+        "type": "timeseries"
+      },
+      {
+        "datasource": "Prometheus",
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "palette-classic"},
+            "custom": {"lineWidth": 1},
+            "mappings": [],
+            "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+            "unit": "s"
+          },
+          "overrides": []
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 24},
+        "id": 9,
+        "options": {
+          "legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true},
+          "tooltip": {"mode": "single", "sort": "none"}
+        },
+        "pluginVersion": "11.1.0",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.50, sum(rate(manga_studio_db_query_duration_seconds_bucket[5m])) by (le, query_type))",
+            "legendFormat": "p50 {{query_type}}",
+            "refId": "A"
+          },
+          {
+            "expr": "histogram_quantile(0.95, sum(rate(manga_studio_db_query_duration_seconds_bucket[5m])) by (le, query_type))",
+            "legendFormat": "p95 {{query_type}}",
+            "refId": "B"
+          }
+        ],
+        "title": "Database Query Latency (p50/p95)",
+        "type": "timeseries"
+      },
+      {
+        "datasource": "Prometheus",
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "palette-classic"},
+            "custom": {"lineWidth": 1},
+            "mappings": [],
+            "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+            "unit": "short"
+          },
+          "overrides": []
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 24},
+        "id": 10,
+        "options": {
+          "legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true},
+          "tooltip": {"mode": "single", "sort": "none"}
+        },
+        "pluginVersion": "11.1.0",
+        "targets": [
+          {
+            "expr": "manga_studio_db_pool_size",
+            "legendFormat": "{{state}}",
+            "refId": "A"
+          }
+        ],
+        "title": "Database Connection Pool",
+        "type": "timeseries"
+      },
+      {
+        "datasource": "Prometheus",
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "palette-classic"},
+            "custom": {"lineWidth": 1},
+            "mappings": [],
+            "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+            "unit": "B"
+          },
+          "overrides": []
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 24, "y": 16},
+        "id": 11,
+        "options": {
+          "legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true},
+          "tooltip": {"mode": "single", "sort": "none"}
+        },
+        "pluginVersion": "11.1.0",
+        "targets": [
+          {
+            "expr": "sum(rate(manga_studio_tokens_usage_total[5m])) by (type)",
+            "legendFormat": "{{type}} tokens",
+            "refId": "A"
+          }
+        ],
+        "title": "Token Usage Rate",
+        "type": "timeseries"
+      },
+      {
+        "datasource": "Prometheus",
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "palette-classic"},
+            "custom": {"lineWidth": 1},
+            "mappings": [],
+            "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+            "unit": "short"
+          },
+          "overrides": []
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 32},
+        "id": 12,
+        "options": {
+          "legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true},
+          "tooltip": {"mode": "single", "sort": "none"}
+        },
+        "pluginVersion": "11.1.0",
+        "targets": [
+          {
+            "expr": "sum(rate(manga_studio_upload_media_total[5m])) by (content_type, status)",
+            "legendFormat": "{{content_type}} {{status}}",
+            "refId": "A"
+          }
+        ],
+        "title": "Media Upload Rate",
+        "type": "timeseries"
+      },
+      {
+        "datasource": "Prometheus",
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "thresholds"},
+            "mappings": [],
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"color": "red", "value": null},
+                {"color": "yellow", "value": 5},
+                {"color": "green", "value": 0}
+              ]
+            },
+            "unit": "short"
+          },
+          "overrides": []
+        },
+        "gridPos": {"h": 4, "w": 6, "x": 18, "y": 32},
+        "id": 13,
+        "options": {
+          "colorMode": "value",
+          "graphMode": "none",
+          "justifyMode": "auto",
+          "orientation": "auto",
+          "reduceOptions": {"values": false, "calcs": ["lastNotNull"], "fields": ""},
+          "textMode": "auto"
+        },
+        "pluginVersion": "11.1.0",
+        "targets": [
+          {
+            "expr": "manga_studio_migration_total{status=\"failed\"}",
+            "legendFormat": "Failed Backups",
+            "refId": "A"
+          }
+        ],
+        "title": "Failed Backups (1h)",
+        "type": "stat"
+      }
+    ],
+    "refresh": "10s",
+    "schemaVersion": 38,
+    "style": "dark",
+    "tags": ["manga-studio", "production"],
+    "templating": {"list": []},
+    "time": {"from": "now-1h", "to": "now"},
+    "timepicker": {},
+    "timezone": "",
+    "title": "Manga Studio - Production Overview",
+    "uid": "manga-studio-overview",
+    "version": 1,
+    "weekStart": ""
+  },
+  "overwrite": true
+}
