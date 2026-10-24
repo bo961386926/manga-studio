@@ -1,6 +1,6 @@
 /**
  * Electron Builder Configuration
- * Minimal config to avoid schema validation issues
+ * Minimal config - mac config moved to package.json to avoid schema validation issues
  */
 const baseConfig = {
   appId: 'com.forsearch.manga-studio',
@@ -27,7 +27,6 @@ const baseConfig = {
     target: ['AppImage'],
     category: 'AudioVideo',
   },
-  // mac config will be added conditionally
   publish: {
     provider: 'github',
     owner: 'bo961386926',
@@ -36,18 +35,5 @@ const baseConfig = {
     private: false,
   },
 };
-
-// Add mac config only when building for mac
-if (process.platform === 'darwin' || process.argv.includes('--mac')) {
-  baseConfig.mac = {
-    target: ['dmg'],
-    // Disable code signing for CI builds without certificates
-    // forceCodeSigning: false prevents electron-builder from attempting to sign
-    forceCodeSigning: false,
-    dmg: {
-      sign: false,
-    },
-  };
-}
 
 module.exports = baseConfig;
