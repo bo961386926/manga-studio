@@ -53,9 +53,6 @@ jobs:
           node-version: '22'
           cache: 'pnpm'
 
-      - name: Install pnpm
-        run: npm install -g pnpm@11.9.0
-
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
@@ -63,7 +60,7 @@ jobs:
         run: npm run build
 
       - name: Build Electron app
-        run: npx electron-builder ${{ matrix.electron_builder_args }} --publish=always
+        run: npx electron-builder ${{ matrix.electron_builder_args }} --config electron-builder.config.js --publish=always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
