@@ -38,6 +38,7 @@ jobs:
       APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
       APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
       CSC_IDENTITY_AUTO_DISCOVERY: false
+      CSC_LINK: ''
 
     steps:
       - name: Checkout repository
