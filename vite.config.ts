@@ -47,6 +47,31 @@ export default defineConfig(() => {
         alias: {
           '@': path.resolve(__dirname, '.'),
         }
-      }
+      },
+      build: {
+        // 代码分割：将主包 679kB 拆分为 vendor + 功能模块
+        rollupOptions: {
+          output: {
+            manualChunks: {
+              // React 生态
+              'vendor-react': ['react', 'react-dom'],
+              // 重型库单独打包
+              'vendor-ffmpeg': ['@ffmpeg/ffmpeg', '@ffmpeg/util'],
+              'vendor-zip': ['jszip'],
+              // UI 图标库
+              'vendor-ui': ['lucide-react'],
+              // 业务模块按页面/功能拆分（使用实际存在的入口文件）
+              'stage-script': ['./components/StageScript.tsx'],
+              'stage-assets': ['./components/StageAssets/index.tsx'],
+              'stage-director': ['./components/StageDirector.tsx'],
+              'stage-export': ['./components/StageExport/index.tsx'],
+              'model-config': ['./components/ModelConfig/index.tsx'],
+              'auth': ['./components/AuthPage.tsx'],
+            },
+          },
+        },
+        // 警告阈值调整为 800kB（分割后单 chunk 应 < 500kB）
+        chunkSizeWarningLimit: 800,
+      },
     };
 });
