@@ -1,11 +1,7 @@
 /**
  * Electron Builder Configuration
- * Dynamically generates config based on target platform to avoid schema validation issues
- * when building for non-target platforms.
+ * Minimal config to avoid schema validation issues
  */
-const fs = require('fs');
-const path = require('path');
-
 const baseConfig = {
   appId: 'com.forsearch.manga-studio',
   productName: '漫剧工场',
@@ -42,15 +38,10 @@ const baseConfig = {
 };
 
 // Add mac config only when building for mac
-// Note: electron-builder schema validation requires mac config to be minimal on non-mac platforms
+// Minimal config to avoid schema validation issues
 if (process.platform === 'darwin' || process.argv.includes('--mac')) {
   baseConfig.mac = {
     target: ['dmg'],
-    category: 'public.app-category.video',
-    // Disable signing for CI builds without certificates
-    dmg: {
-      sign: false,
-    },
   };
 }
 
