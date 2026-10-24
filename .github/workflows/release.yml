@@ -15,10 +15,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-latest
-            arch: arm64
-            artifact_name: mac
-            electron_builder_args: '--mac --universal'
           - os: windows-latest
             arch: x64
             artifact_name: win
