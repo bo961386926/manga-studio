@@ -1,6 +1,7 @@
 import { ChatModelDefinition, ChatOptions, ChatModelParams } from '../../types/model';
-import { getApiKeyForModel, getApiBaseUrlForModel, getActiveChatModel } from '../modelRegistry';
+import { getApiKeyForModel, getApiBaseUrlForModel, getActiveChatModel, getModelById } from '../modelRegistry';
 import { proxyFetch } from '../apiClient';
+import { invokeChat, makeIdempotencyKey } from '../modelGatewayClient';
 
 export class ApiKeyError extends Error {
   constructor(message: string) {
@@ -42,15 +43,10 @@ const cleanJsonResponse = (response: string): string => {
   return cleaned.trim();
 };
 
-export const callChatApi = async (
+const legacyCallChatApi = async (
   options: ChatOptions,
-  model?: ChatModelDefinition
+  activeModel: ChatModelDefinition
 ): Promise<string> => {
-  const activeModel = model || getActiveChatModel();
-  if (!activeModel) {
-    throw new Error('没有可用的对话模型');
-  }
-
   const apiKey = getApiKeyForModel(activeModel.id);
   if (!apiKey) {
     throw new ApiKeyError('API Key 缺失，请在设置中配置 API Key');
@@ -93,7 +89,6 @@ export const callChatApi = async (
   }
   
   if (options.responseFormat === 'json') {
-    // MiniMax OpenAI 兼容接口不支持 response_format 参数，依赖提示词输出 JSON
     if (activeModel.providerId !== 'minimax') {
       requestBody.response_format = { type: 'json_object' };
     }
@@ -124,7 +119,6 @@ export const callChatApi = async (
           const errorText = await res.text();
           if (errorText) errorMessage = errorText;
         }
-        // MiniMax 余额不足(1008)等错误的中文友好提示
         if (errorMessage.includes('insufficient balance') || errorMessage.includes('1008')) {
           errorMessage = 'MiniMax 账户余额不足 (1008)：请前往 MiniMax 开放平台充值或领取免费额度后重试';
         }
@@ -155,42 +149,32 @@ export const callChatApi = async (
   }
 };
 
-export const verifyApiKey = async (apiKey: string, baseUrl?: string): Promise<{ success: boolean; message: string }> => {
-  try {
-    const url = baseUrl || 'http://api.gitcc.com';
-    
-    const response = await proxyFetch(`${url}/v1/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: 'gpt-41',
-        messages: [{ role: 'user', content: '仅返回1' }],
-        temperature: 0.1,
-        max_tokens: 5,
-      }),
-    });
-
-    if (!response.ok) {
-      let errorMessage = `验证失败: ${response.status}`;
-      try {
-        const errorData = await response.json();
-        errorMessage = errorData.error?.message || errorMessage;
-      } catch (e) {
-        // ignore
-      }
-      return { success: false, message: errorMessage };
-    }
-
-    const data = await response.json();
-    if (data.choices?.[0]?.message?.content !== undefined) {
-      return { success: true, message: 'API Key 验证成功' };
-    } else {
-      return { success: false, message: '返回格式异常' };
-    }
-  } catch (error: any) {
-    return { success: false, message: error.message || '网络错误' };
+export const callChatApi = async (
+  options: ChatOptions,
+  model?: ChatModelDefinition
+): Promise<string> => {
+  const activeModel = model || getActiveChatModel();
+  if (!activeModel) {
+    throw new Error('没有可用的对话模型');
   }
+
+  // Gateway 路由：adapter_kind === 'gateway' 走服务端网关
+  if (activeModel.adapter_kind === 'gateway') {
+    const result = await invokeChat(
+      activeModel.id,
+      { 
+        prompt: options.prompt, 
+        systemPrompt: options.systemPrompt, 
+        responseFormat: options.responseFormat,
+      },
+      makeIdempotencyKey('chat'),
+      { signal: (options as any).signal }
+    );
+    return result.content;
+  }
+  
+  // Legacy 直连：仅开发/迁移期兜底
+  console.warn('[Legacy] 使用直连适配器，建议迁移到网关模型');
+  return legacyCallChatApi(options, activeModel);
 };
+

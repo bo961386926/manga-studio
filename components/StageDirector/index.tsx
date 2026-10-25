@@ -2,7 +2,10 @@
 import React, { useState, useEffect } from 'react';
 import { LayoutGrid, Sparkles, Loader2, AlertCircle, Edit2, Film, Video as VideoIcon } from 'lucide-react';
 import { ProjectState, Shot, Keyframe, AspectRatio, VideoDuration } from '../../types';
+import { DEFAULT_CHAT_MODEL } from '../../types/model';
 import { generateImage, generateVideo, generateActionSuggestion, optimizeKeyframePrompt, optimizeBothKeyframes, enhanceKeyframePrompt, splitShotIntoSubShots, rewritePromptForModeration } from '../../services/geminiService';
+import { generateVideoWithPolling } from '../../services/modelService';
+import { resolveGatewayModel } from '../../services/gatewayModels';
 import { 
   getRefImagesForShot, 
   buildKeyframePrompt,
@@ -218,14 +221,21 @@ const StageDirector: React.FC<Props> = ({ project, updateProject, onApiKeyError 
     }));
     
     try {
-      const videoUrl = await generateVideo(
-        videoPrompt, 
-        sKf.imageUrl, 
-        eKf?.imageUrl,
-        selectedModel,
-        aspectRatio,
-        duration
-      );
+      // 多服务商改造：统一解析器按显式模型 id 解析；命中网关 → 异步任务+轮询（保留状态回调）
+      const gatewayModel = await resolveGatewayModel('video', selectedModel);
+      const videoUrl = gatewayModel
+        ? await generateVideoWithPolling(
+            { prompt: videoPrompt, aspectRatio, duration, modelId: gatewayModel.id },
+            { onStatus: (s) => setIsAIGenerating(s === 'polling' || s === 'queued' || s === 'submitting') }
+          )
+        : await generateVideo(
+            videoPrompt,
+            sKf.imageUrl,
+            eKf?.imageUrl,
+            selectedModel,
+            aspectRatio,
+            duration
+          );
 
       updateShot(shot.id, (s) => ({
         ...s,
@@ -601,7 +611,7 @@ const StageDirector: React.FC<Props> = ({ project, updateProject, onApiKeyError 
     }
     
     const visualStyle = project.visualStyle || project.scriptData?.visualStyle || 'live-action';
-    const shotGenerationModel = project.shotGenerationModel || 'gpt-5.1';
+    const shotGenerationModel = project.shotGenerationModel || DEFAULT_CHAT_MODEL;
     
     setIsSplittingShot(true);
     

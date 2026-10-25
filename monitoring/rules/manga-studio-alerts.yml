@@ -1,0 +1,175 @@
+groups:
+  - name: manga-studio.rules
+    interval: 30s
+    rules:
+      # === API Health ===
+      - alert: MangaStudioAPIDown
+        expr: up{job="manga-studio-api"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Manga Studio API is down"
+          description: "API has been down for more than 1 minute"
+
+      - alert: MangaStudioAPIHighLatency
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(manga_studio_http_request_duration_seconds_bucket[5m])) by (le, method, path)
+          ) > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High API latency (p95 > 2s)"
+          description: "Method {{ $labels.method }} {{ $labels.path }} p95 latency is {{ $value }}s"
+
+      - alert: MangaStudioAPIHighErrorRate
+        expr: |
+          sum(rate(manga_studio_http_requests_total{status=~"5.."}[5m])) by (method, path)
+          /
+          sum(rate(manga_studio_http_requests_total[5m])) by (method, path)
+          > 0.05
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High 5xx error rate (>5%)"
+          description: "{{ $labels.method }} {{ $labels.path }} 5xx rate is {{ $value | humanizePercentage }}"
+
+      # === Model Gateway ===
+      - alert: MangaStudioModelInvocationFailures
+        expr: |
+          sum(rate(manga_studio_model_invocations_total{status="failed"}[5m])) by (operation)
+          /
+          sum(rate(manga_studio_model_invocations_total[5m])) by (operation)
+          > 0.1
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Model invocation failure rate >10%"
+          description: "Operation {{ $labels.operation }} failure rate is {{ $value | humanizePercentage }}"
+
+      - alert: MangaStudioModelInvocationHighLatency
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(manga_studio_model_invocation_duration_seconds_bucket[5m])) by (le, operation)
+          ) > 60
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Model invocation p95 latency >60s"
+          description: "Operation {{ $labels.operation }} p95 is {{ $value }}s"
+
+      - alert: MangaStudioAsyncJobsStuck
+        expr: manga_studio_model_jobs_active{status="queued"} > 50
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Too many queued async jobs ({{ $value }})"
+          description: "Queue backlog growing, check upstream provider health"
+
+      - alert: MangaStudioSubmissionUncertainStale
+        expr: |
+          time() - manga_studio_model_jobs_active{status="submission_uncertain"} > 3600
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Stale submission_uncertain jobs >1h"
+          description: "Jobs in submission_uncertain state for over 1 hour, check resolveStaleUncertainJobs scheduler"
+
+      # === Credits / Business ===
+      - alert: MangaStudioLowCreditsBalance
+        expr: manga_studio_credits_balance < 100
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "User credits balance low ({{ $value }})"
+          description: "User {{ $labels.user_id }} has only {{ $value }} credits remaining"
+
+      - alert: MangaStudioHighCreditsDeductionRate
+        expr: |
+          sum(rate(manga_studio_credits_deducted_total[5m])) by (operation) > 1000
+        for: 5m
+        labels:
+          severity: info
+        annotations:
+          summary: "High credits deduction rate for {{ $labels.operation }}"
+          description: "{{ $value | humanize }} credits/min being deducted"
+
+      # === Database ===
+      - alert: MangaStudioDBHighLatency
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(manga_studio_db_query_duration_seconds_bucket[5m])) by (le, query_type)
+          ) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Database query p95 latency >1s"
+          description: "Query type {{ $labels.query_type }} p95 is {{ $value }}s"
+
+      - alert: MangaStudioDBPoolExhaustion
+        expr: |
+          manga_studio_db_pool_size{state="waiting"} > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Database connection pool exhaustion"
+          description: "{{ $value }} connections waiting for pool"
+
+      - alert: MangaStudioDBPoolHighUtilization
+        expr: |
+          manga_studio_db_pool_size{state="idle"} / manga_studio_db_pool_size{state="total"} < 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "DB pool utilization >90%"
+          description: "Only {{ $value | humanizePercentage }} idle connections remaining"
+
+      # === System ===
+      - alert: MangaStudioHighMemoryUsage
+        expr: |
+          (process_resident_memory_bytes / 1024 / 1024 / 1024) > 2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Process memory >2GB"
+          description: "Resident memory is {{ $value | humanize }}GB"
+
+      - alert: MangaStudioHighCPUUsage
+        expr: |
+          rate(process_cpu_seconds_total[5m]) > 2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage (>2 cores)"
+          description: "Process using {{ $value }} CPU cores"
+
+      # === Backup ===
+      - alert: MangaStudioBackupFailed
+        expr: increase(manga_studio_migration_total{status="failed"}[1h]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "Database backup failed"
+          description: "Backup job reported failure in the last hour"
+
+      - alert: MangaStudioBackupStale
+        expr: |
+          time() - manga_studio_migration_total{status="success"} > 86400
+        labels:
+          severity: warning
+        annotations:
+          summary: "No successful backup in 24h"
+          description: "Last successful backup was {{ $value | humanizeDuration }} ago"

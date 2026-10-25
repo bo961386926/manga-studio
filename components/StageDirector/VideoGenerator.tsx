@@ -10,6 +10,7 @@ import {
 } from '../../services/modelRegistry';
 import { VideoModelDefinition } from '../../types/model';
 import { base64ToBlobUrl } from '../../services/videoUtils';
+import { getVideoProgressDisplay } from './videoProgress';
 
 interface VideoGeneratorProps {
   shot: Shot;
@@ -45,8 +46,9 @@ const VideoGenerator: React.FC<VideoGeneratorProps> = ({
   const isGenerating = shot.interval?.status === 'generating';
   const hasVideo = !!shot.interval?.videoUrl;
 
-  const [elapsedTime, setElapsedTime] = useState(0);
-  const [progress, setProgress] = useState(0);
+  // 诚实状态展示（F5）：不做任何百分比/剩余时间预估，只显示真实轮询状态与实际已用时
+  const [progressStartedAt, setProgressStartedAt] = useState(0);
+  const [progressNow, setProgressNow] = useState(0);
   const [videoBlobUrl, setVideoBlobUrl] = useState<string>('');
 
   useEffect(() => {
@@ -65,33 +67,26 @@ const VideoGenerator: React.FC<VideoGeneratorProps> = ({
     }
   }, [shot.interval?.videoUrl]);
 
+  // 状态文案由真实轮询状态驱动（见 videoProgress.ts 的状态映射表），无百分比与剩余时间预估
+  const progressDisplay = isGenerating
+    ? getVideoProgressDisplay(shot.interval?.status, progressStartedAt, progressNow)
+    : null;
+
   useEffect(() => {
-    let timer: any;
-    if (isGenerating) {
-      setElapsedTime(0);
-      setProgress(0);
-      const startTime = Date.now();
-      timer = setInterval(() => {
-        const elapsed = Math.floor((Date.now() - startTime) / 1000);
-        setElapsedTime(elapsed);
-        
-        const targetTime = 45; 
-        if (elapsed < targetTime) {
-          const calculatedProgress = Math.min(95, Math.floor((elapsed / targetTime) * 95));
-          setProgress(calculatedProgress);
-        } else {
-          const extraTime = elapsed - targetTime;
-          const calculatedProgress = Math.min(99, 95 + Math.floor((1 - Math.exp(-extraTime / 20)) * 4));
-          setProgress(calculatedProgress);
-        }
-      }, 1000);
-    } else {
-      setElapsedTime(0);
-      setProgress(0);
+    if (!isGenerating) {
+      setProgressStartedAt(0);
+      setProgressNow(0);
+      return;
     }
+    const startTime = Date.now();
+    setProgressStartedAt(startTime);
+    setProgressNow(startTime);
+    const timer = setInterval(() => {
+      setProgressNow(Date.now());
+    }, 1000);
 
     return () => {
-      if (timer) clearInterval(timer);
+      clearInterval(timer);
     };
   }, [isGenerating]);
 
@@ -188,22 +183,15 @@ const VideoGenerator: React.FC<VideoGeneratorProps> = ({
         </div>
       )}
 
-      {isGenerating && (
+      {isGenerating && progressDisplay && (
         <div className="space-y-1.5 p-3 bg-cyan-950/20 border border-cyan-500/10 rounded-xl animate-pulse">
           <div className="flex justify-between text-[10px] font-mono">
-            <span className="text-cyan-200">正在生成视频中...</span>
-            <span className="text-cyan-300 font-bold">{progress}%</span>
+            <span className="text-cyan-200">{progressDisplay.stageLabel}</span>
+            <span className="text-cyan-300 font-bold">{progressDisplay.elapsedLabel}</span>
           </div>
-          <div className="w-full h-1.5 bg-slate-900 rounded-full overflow-hidden border border-white/5">
-            <div 
-              className="h-full bg-gradient-to-r from-cyan-500 to-blue-500 transition-all duration-1000 ease-out"
-              style={{ width: `${progress}%` }}
-            />
-          </div>
-          <div className="flex justify-between text-[9px] text-zinc-500 font-mono">
-            <span>已耗时: {elapsedTime}秒</span>
-            <span>预计总共需: ~45秒</span>
-          </div>
+          <p className="text-[9px] text-zinc-500 font-mono">
+            状态来自真实生成任务轮询，用时实时累计，无预计完成时间
+          </p>
         </div>
       )}
 

@@ -1,7 +1,20 @@
 // Author: forsearch | Updated: 2026-04-30
-const { app, BrowserWindow, Menu } = require('electron');
+const { app, BrowserWindow, Menu, ipcMain, dialog } = require('electron');
 const path = require('path');
 const http = require('http');
+const crypto = require('crypto');
+const fs = require('fs');
+
+// 统一环境变量配置（CommonJS 兼容）
+function getEnv(key, fallback) {
+  if (process.env[key]) return process.env[key];
+  return fallback;
+}
+function getEnvInt(key, fallback) {
+  const val = getEnv(key, String(fallback));
+  const parsed = parseInt(val, 10);
+  return Number.isNaN(parsed) ? fallback : parsed;
+}
 
 function getDistRoot() {
   if (process.env.NODE_ENV === 'development' || !app.isPackaged) {
@@ -10,13 +23,25 @@ function getDistRoot() {
   return path.join(process.resourcesPath, 'app.asar.unpacked', 'dist');
 }
 
-const API_PROXY_TARGET = 'http://api.gitcc.com';
-const DEFAULT_PORT = 39628;
+const DEFAULT_PORT = getEnvInt('ELECTRON_PORT', 39628);
 
 let mainWindow = null;
 let server = null;
 
 function createWindow(port) {
+  const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
+  
+  // Remote HTTPS deployment: when REMOTE_APP_URL is set, load the remote Web
+  // app instead of the bundled dist (stage-3 gate). webSecurity stays on.
+  const remoteUrl = process.env.REMOTE_APP_URL;
+  const url = remoteUrl
+    ? new URL(remoteUrl).href
+    : `http://localhost:${port}/`;
+  
+  // webSecurity: true 仅在加载 HTTPS 远程地址时生效
+  // 本地开发加载 http://localhost 必须关闭，否则 CSP 会阻止混合内容/不安全上下文
+  const webSecurity = remoteUrl ? true : false;
+
   const win = new BrowserWindow({
     width: 1400,
     height: 900,
@@ -25,11 +50,13 @@ function createWindow(port) {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
+      sandbox: true,
+      webSecurity,
+      preload: path.join(__dirname, 'preload.cjs'),
     },
     show: false,
   });
 
-  const url = `http://localhost:${port}/`;
   win.loadURL(url);
   win.once('ready-to-show', () => win.show());
   win.on('closed', () => { mainWindow = null; });
@@ -59,25 +86,14 @@ function findFreePort(startPort) {
 
 async function startServer() {
   const express = require('express');
-  const { createProxyMiddleware } = require('http-proxy-middleware');
 
   const distRoot = getDistRoot();
   const app = express();
 
-  app.use(
-    '/api-proxy',
-    createProxyMiddleware({
-      target: API_PROXY_TARGET,
-      changeOrigin: true,
-      pathRewrite: { '^/api-proxy': '' },
-      onError(err, req, res) {
-        console.error('Proxy error:', err.message);
-        res.writeHead(502, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Proxy error', message: err.message }));
-      },
-    })
-  );
-
+  // Static shell only. No API proxy here: all model calls go through the
+  // remote HTTPS deployment the renderer is pointed at (REMOTE_APP_URL) or
+  // fail loudly until the backend is configured. The bundled dist without a
+  // backend cannot save projects or invoke models by design (stage-3 gate).
   app.use(express.static(distRoot, { index: false }));
   app.get('*', (req, res) => {
     res.sendFile(path.join(distRoot, 'index.html'));
@@ -102,6 +118,39 @@ async function startServer() {
 
 async function main() {
   Menu.setApplicationMenu(null);
+
+  // Legacy config export: seal localStorage payload into an encrypted v1
+  // envelope and save it. The envelope module lives under server/ (ESM);
+  // argon2 resolves from server/node_modules. Packaged builds must include
+  // server/migration + argon2 (see stage-3 hardening task).
+  ipcMain.handle('legacy:export', async (_event, { data, password }) => {
+    try {
+      if (!data || typeof password !== 'string' || password.length < 8) {
+        return { ok: false, reason: '需要至少 8 位的导出密码' };
+      }
+      const { sealEnvelope } = await import('../server/migration/envelope.js');
+      const envelope = await sealEnvelope(
+        {
+          exportId: crypto.randomUUID(),
+          config: data,
+          purpose: 'legacy-model-config',
+        },
+        password
+      );
+      const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
+        title: '导出迁移包',
+        defaultPath: `manga-studio-export-${Date.now()}.json`,
+        filters: [{ name: 'JSON', extensions: ['json'] }],
+      });
+      if (canceled || !filePath) return { ok: false, reason: '已取消' };
+      await fs.promises.writeFile(filePath, JSON.stringify(envelope, null, 2));
+      return { ok: true, path: filePath };
+    } catch (err) {
+      console.error('[export] failed:', err.message);
+      return { ok: false, reason: `导出失败: ${err.message}` };
+    }
+  });
+
   const port = await startServer();
   createWindow(port);
 }

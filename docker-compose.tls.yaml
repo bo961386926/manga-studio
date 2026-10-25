@@ -1,0 +1,19 @@
+# TLS 生产覆盖文件：与主 compose 叠加使用（Docker Compose v2.24+ 支持 !override 标签）。
+#
+#   1) 签发证书（示例，DNS 验证或 80 端口停机验证二选一）：
+#      sudo certbot certonly --standalone -d app.example.com
+#      sudo cp /etc/letsencrypt/live/app.example.com/fullchain.pem deploy/certs/
+#      sudo cp /etc/letsencrypt/live/app.example.com/privkey.pem  deploy/certs/
+#   2) .env 中 CORS_ORIGINS / PUBLIC_APP_URL 改为 https://app.example.com
+#   3) 启动：
+#      docker compose --env-file .env -f docker-compose.yaml -f docker-compose.tls.yaml up -d --build
+#
+# 若由宿主层（IIS/nginx/Caddy）终止 TLS，则不需要本文件，直接用主 compose 并把宿主反代上游指向 127.0.0.1:3005。
+services:
+  frontend:
+    ports: !override
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/nginx-tls.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./deploy/certs:/etc/nginx/certs:ro

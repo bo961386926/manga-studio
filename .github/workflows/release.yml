@@ -2,37 +2,127 @@ name: Release
 
 on:
   push:
-    tags: ['v*']
+    tags:
+      - 'v*.*.*'
 
 permissions:
   contents: write
+  packages: read
 
 jobs:
-  release:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            arch: x64
+            artifact_name: win
+            electron_builder_args: '--win --x64'
+          - os: ubuntu-latest
+            arch: x64
+            artifact_name: linux
+            electron_builder_args: '--linux AppImage --x64'
 
-      - uses: actions/setup-node@v4
+    runs-on: ${{ matrix.os }}
+
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      CSC_LINK: ${{ secrets.CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      CSC_IDENTITY_AUTO_DISCOVERY: false
+      CSC_LINK: ''
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
         with:
-          node-version: 20
-          cache: npm
+          fetch-depth: 0
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
-      - name: Build frontend
+      - name: Build application
         run: npm run build
 
-      - name: Package web dist
+      - name: Build Electron app
+        run: npx electron-builder ${{ matrix.electron_builder_args }} --config electron-builder.config.cjs --publish=always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}-installers
+          path: |
+            release/*.dmg
+            release/*.exe
+            release/*.AppImage
+            release/*.blockmap
+            release/*.yml
+            release/*.zip
+          if-no-files-found: warn
+          retention-days: 7
+
+  release-notes:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract release notes from CHANGELOG.md
+        id: changelog
         run: |
-          zip -r manga-studio-web-dist.zip dist/
-          echo "artifact=manga-studio-web-dist.zip" >> "$GITHUB_ENV"
+          TAG="${GITHUB_REF#refs/tags/}"
+          VERSION="${TAG#v}"
+          
+          # Extract the section for this version from CHANGELOG.md
+          # The format is: ## [VERSION] - DATE
+          awk -v ver="$VERSION" '
+            BEGIN { found=0; printing=0 }
+            /^## \[/ {
+              if (found && printing) exit
+              if ($0 ~ "\\[" ver "\\]") {
+                found=1
+                printing=1
+                next
+              }
+            }
+            printing { print }
+          ' CHANGELOG.md > release-notes.md
+          
+          # If no notes found, use a default
+          if [ ! -s release-notes.md ]; then
+            echo "Release $TAG" > release-notes.md
+          fi
+          
+          echo "notes<<EOF" >> $GITHUB_OUTPUT
+          cat release-notes.md >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true
-          skip_if_release_exists: true
-          files: |
-            manga-studio-web-dist.zip
+          tag_name: ${{ github.ref_name }}
+          body_path: release-notes.md
+          draft: false
+          prerelease: false
+          generate_release_notes: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

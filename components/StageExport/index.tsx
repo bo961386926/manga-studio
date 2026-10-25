@@ -4,6 +4,8 @@ import { Film } from 'lucide-react';
 import { ProjectState } from '../../types';
 import { downloadMasterVideo, downloadSourceAssets } from '../../services/exportService';
 import { mergeShotsToSingleMp4 } from '../../services/videoMerger';
+import { invokeTts, listModels, makeIdempotencyKey } from '../../services/modelGatewayClient';
+import { buildSubtitleCues, cuesToSrt } from '../../services/subtitleService';
 import { STYLES } from './constants';
 import {
   calculateEstimatedDuration,
@@ -41,6 +43,12 @@ const StageExport: React.FC<Props> = ({ project }) => {
   const [isMerging, setIsMerging] = useState(false);
   const [mergePhase, setMergePhase] = useState('');
   const [mergeProgress, setMergeProgress] = useState(0);
+
+  // 字幕：默认烧录台词；没有台词的项目可切到「动作描述」
+  const [burnSubtitles, setBurnSubtitles] = useState(true);
+  const [subtitleSource, setSubtitleSource] = useState<'dialogue' | 'action'>('dialogue');
+  const [dubNarration, setDubNarration] = useState(false);
+  const [bgmFile, setBgmFile] = useState<File | null>(null);
 
   const [showLogsModal, setShowLogsModal] = useState(false);
   const [expandedLogId, setExpandedLogId] = useState<string | null>(null);
@@ -141,18 +149,44 @@ const StageExport: React.FC<Props> = ({ project }) => {
     }
   };
 
+  // 字幕时间轴与导出合并共用同一片段集合与顺序（只累计已完成视频的镜头）
+  const currentSubtitleCues = buildSubtitleCues(project.shots, { useActionSummary: subtitleSource === 'action' });
+  const dialogueShotCount = completedShots.filter(s => (s.dialogue || '').trim()).length;
+  const actionShotCount = completedShots.filter(s => (s.actionSummary || '').trim()).length;
+
   const handleMergeToMp4 = async () => {
     if (isMerging || completedShots.length === 0) return;
     setIsMerging(true);
     setMergeProgress(0);
     try {
+      // ② 配音：逐镜头 TTS（仅含台词镜头，按顺序 concat）；BGM 上传文件
+      const mergeOptions: Record<string, unknown> = {};
+      if (burnSubtitles) mergeOptions.subtitleCues = currentSubtitleCues;
+      if (dubNarration) {
+        const models = await listModels();
+        const ttsModel = models.find(m => m.capability === 'tts');
+        if (!ttsModel) throw new Error('未找到 TTS 配音模型，请先在「模型网关」配置 tts 能力模型');
+        const narrationData: Uint8Array[] = [];
+        const narrShots = completedShots.filter(s => (s.dialogue || '').trim());
+        for (let i = 0; i < narrShots.length; i++) {
+          setMergePhase(`配音 ${i + 1}/${narrShots.length}...`);
+          setMergeProgress(Math.round(((i + 1) / narrShots.length) * 15));
+          const r = await invokeTts(ttsModel.id, { prompt: narrShots[i].dialogue.trim() }, makeIdempotencyKey('tts'));
+          const res = await fetch(`/api/model-invocations/media-assets/${r.assetId}/content`);
+          if (!res.ok) throw new Error(`配音音频下载失败: HTTP ${res.status}`);
+          narrationData.push(new Uint8Array(await res.arrayBuffer()));
+        }
+        mergeOptions.narrationData = narrationData;
+      }
+      if (bgmFile) mergeOptions.bgmData = new Uint8Array(await bgmFile.arrayBuffer());
       await mergeShotsToSingleMp4(
         project.shots,
         project.scriptData?.title || project.title,
         (phase, prog) => {
           setMergePhase(phase);
           setMergeProgress(prog);
-        }
+        },
+        Object.keys(mergeOptions).length ? mergeOptions : undefined
       );
       setTimeout(() => {
         setIsMerging(false);
@@ -166,6 +200,22 @@ const StageExport: React.FC<Props> = ({ project }) => {
       setMergePhase('');
       setMergeProgress(0);
     }
+  };
+
+  const handleDownloadSrt = () => {
+    if (currentSubtitleCues.length === 0) {
+      showAlert('没有可用的字幕内容：镜头缺台词或未渲染完成。可把字幕源切换为「动作描述」再试。', { type: 'warning' });
+      return;
+    }
+    const blob = new Blob([cuesToSrt(currentSubtitleCues)], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${project.scriptData?.title || project.title || 'master'}.srt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   };
 
   const handleDownloadAssets = async () => {
@@ -262,6 +312,61 @@ const StageExport: React.FC<Props> = ({ project }) => {
                   {isMerging ? '合并中...' : '合并导出 MP4'}
                 </button>
               </div>
+              {completedShots.length > 0 && (
+                <div className="mb-3 pt-3 border-t border-white/5 flex items-center justify-between gap-2 flex-wrap">
+                  <label className="flex items-center gap-2 text-[11px] text-zinc-300 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={burnSubtitles}
+                      onChange={(e) => setBurnSubtitles(e.target.checked)}
+                      className="accent-cyan-400 w-3.5 h-3.5"
+                    />
+                    烧录字幕
+                    <span className="text-zinc-500">
+                      {subtitleSource === 'dialogue'
+                        ? dialogueShotCount > 0
+                          ? `（${dialogueShotCount} 条台词）`
+                          : '（镜头没有台词，可改用动作描述）'
+                        : `（${actionShotCount} 条动作描述）`}
+                    </span>
+                  </label>
+                  <label className="flex items-center gap-1.5 text-xs text-zinc-300 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={dubNarration}
+                      onChange={(e) => setDubNarration(e.target.checked)}
+                      className="accent-cyan-400 w-3.5 h-3.5"
+                    />
+                    AI 配音（TTS）
+                    <span className="text-zinc-500">（按台词镜头顺序拼接）</span>
+                  </label>
+                  <label className="flex items-center gap-1.5 text-xs text-zinc-300 cursor-pointer">
+                    <input
+                      type="file"
+                      accept="audio/*"
+                      onChange={(e) => setBgmFile(e.target.files?.[0] ?? null)}
+                      className="text-[10px] text-zinc-400 file:mr-1 file:px-1.5 file:py-0.5 file:rounded file:border-0 file:bg-zinc-700 file:text-zinc-200"
+                    />
+                    BGM
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={subtitleSource}
+                      onChange={(e) => setSubtitleSource(e.target.value as 'dialogue' | 'action')}
+                      className="bg-slate-950/70 border border-white/10 rounded-lg px-2 py-1.5 text-[11px] text-zinc-200 focus:outline-none focus:border-cyan-400/40"
+                    >
+                      <option value="dialogue">字幕源：台词</option>
+                      <option value="action">字幕源：动作描述</option>
+                    </select>
+                    <button
+                      onClick={handleDownloadSrt}
+                      className="px-2.5 py-1.5 text-[11px] rounded-lg border border-white/10 text-zinc-300 hover:bg-white/5 transition-colors"
+                    >
+                      下载 SRT
+                    </button>
+                  </div>
+                </div>
+              )}
               {isMerging && (
                 <div className="space-y-1">
                   <div className="flex justify-between text-[10px] text-zinc-400 font-mono">

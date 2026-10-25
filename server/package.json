@@ -5,11 +5,18 @@
   "type": "module",
   "scripts": {
     "start": "node index.js",
-    "dev": "node --watch index.js"
+    "dev": "node --watch index.js",
+    "test": "NODE_ENV=test DB_NAME=manga_studio_test node --test --test-concurrency=1",
+    "admin:bootstrap": "node bootstrap-admin.js"
   },
   "dependencies": {
+    "argon2": "^0.41.1",
     "cors": "^2.8.5",
     "express": "^4.21.0",
-    "pg": "^8.13.0"
+    "nodemailer": "^9.0.5",
+    "pg": "^8.13.0",
+    "pino": "^10.4.0",
+    "pino-pretty": "^13.2.0",
+    "prom-client": "^15.1.3"
   }
 }

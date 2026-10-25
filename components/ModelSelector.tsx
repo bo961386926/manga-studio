@@ -1,22 +1,26 @@
 /**
- * 模型选择器组件
- * 用于在各功能模块中选择要使用的模型
+ * 模型选择器 —— 数据源是服务端网关模型（多服务商/多模型改造后唯一可信来源）。
+ *
+ * 旧客户端目录（vendor 直连模型）已随 /api/ai-forward 下线而不可用，不再出现在
+ * 选项里误导用户。网关列表变化（网关面板增删服务商/模型、迁移向导导入）通过
+ * `gateway-models-changed` 窗口事件广播，本组件监听后强制刷新。
+ *
+ * 值语义：value = 网关模型 id。父组件存量的旧目录 id（如 doubao-pro-32k）在
+ * 列表加载后不匹配任何选项，由 shouldAdoptGatewayModel 自动采用第一个可用模型。
  */
-
-import React from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Cpu, ChevronDown } from 'lucide-react';
-import { 
-  ModelType, 
-  ModelDefinition,
-  ChatModelDefinition,
-  ImageModelDefinition,
-  VideoModelDefinition,
-} from '../types/model';
+import { ModelType } from '../types/model';
 import {
-  getChatModels,
-  getImageModels,
-  getVideoModels,
-} from '../services/modelRegistry';
+  buildGatewayModelOptions,
+  loadGatewayModels,
+  shouldAdoptGatewayModel,
+  GATEWAY_MODELS_CHANGED_EVENT,
+  type GatewayCapability,
+  type GatewayModelOption,
+} from '../services/gatewayModels';
+
+const capOf = (type: ModelType): GatewayCapability => type;
 
 interface ModelSelectorProps {
   type: ModelType;
@@ -27,11 +31,8 @@ interface ModelSelectorProps {
   label?: string;
 }
 
-const typeLabels: Record<ModelType, string> = {
-  chat: '对话模型',
-  image: '图片模型',
-  video: '视频模型',
-};
+const selectCls =
+  'appearance-none bg-white/[0.06] border border-white/10 text-white text-xs rounded-xl focus:border-cyan-300/40 focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer';
 
 const ModelSelector: React.FC<ModelSelectorProps> = ({
   type,
@@ -41,25 +42,46 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
   compact = false,
   label,
 }) => {
-  // 获取对应类型的模型列表（仅启用的模型）
-  const getModels = (): ModelDefinition[] => {
-    let models: ModelDefinition[] = [];
-    switch (type) {
-      case 'chat':
-        models = getChatModels();
-        break;
-      case 'image':
-        models = getImageModels();
-        break;
-      case 'video':
-        models = getVideoModels();
-        break;
-    }
-    return models.filter(m => m.isEnabled);
-  };
+  // null = 加载中；[] = 服务端没有任何该能力的可用模型
+  const [options, setOptions] = useState<GatewayModelOption[] | null>(null);
 
-  const models = getModels();
-  const selectedModel = models.find(m => m.id === value);
+  const refresh = useCallback(
+    async (force: boolean) => {
+      const models = await loadGatewayModels(force);
+      setOptions(buildGatewayModelOptions(models, capOf(type)));
+    },
+    [type]
+  );
+
+  useEffect(() => {
+    refresh(false);
+    const onChanged = () => refresh(true);
+    window.addEventListener(GATEWAY_MODELS_CHANGED_EVENT, onChanged);
+    return () => window.removeEventListener(GATEWAY_MODELS_CHANGED_EVENT, onChanged);
+  }, [refresh]);
+
+  // 当前值失效（旧目录存量 id / 模型被删除）时自动采用第一个可用模型
+  useEffect(() => {
+    if (!options) return;
+    const adopt = shouldAdoptGatewayModel(value, options);
+    if (adopt) onChange(adopt);
+  }, [options, value, onChange]);
+
+  const loading = options === null;
+  const empty = options !== null && options.length === 0;
+  const selected = options?.find((o) => o.id === value) || null;
+
+  const renderOptions = () => (
+    <>
+      {loading && <option value="">加载模型中…</option>}
+      {empty && <option value="">暂无可用模型——请到「模型配置 → 网关」添加服务商与模型</option>}
+      {options?.map((o) => (
+        <option key={o.id} value={o.id}>
+          {o.label}
+        </option>
+      ))}
+    </>
+  );
 
   if (compact) {
     return (
@@ -67,14 +89,10 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
         <select
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          disabled={disabled}
-          className="appearance-none bg-white/[0.06] border border-white/10 text-white text-xs rounded-xl px-3 py-1.5 pr-7 focus:border-cyan-300/40 focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+          disabled={disabled || loading || empty}
+          className={`${selectCls} px-3 py-1.5 pr-7`}
         >
-          {models.map((model) => (
-            <option key={model.id} value={model.id}>
-              {model.name}
-            </option>
-          ))}
+          {renderOptions()}
         </select>
         <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 text-zinc-500 pointer-events-none" />
       </div>
@@ -93,20 +111,22 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
         <select
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          disabled={disabled}
-          className="w-full appearance-none bg-white/[0.06] border border-white/10 text-white text-xs rounded-xl px-3 py-2.5 pr-8 focus:border-cyan-300/40 focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+          disabled={disabled || loading || empty}
+          className={`${selectCls} w-full px-3 py-2.5 pr-8`}
         >
-          {models.map((model) => (
-            <option key={model.id} value={model.id}>
-              {model.name} {model.description ? `- ${model.description}` : ''}
-            </option>
-          ))}
+          {renderOptions()}
         </select>
         <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500 pointer-events-none" />
       </div>
-      {selectedModel && !compact && (
+      {selected && (
         <p className="text-[9px] text-zinc-600">
-          ID: {selectedModel.id}
+          API 模型: {selected.apiModel} · {selected.providerName}
+          {selected.providerScope === 'private' ? '（私有）' : ''}
+        </p>
+      )}
+      {empty && (
+        <p className="text-[9px] text-zinc-600">
+          配置入口：模型配置 → 网关 → 添加服务商与模型（Key 保存在服务端）
         </p>
       )}
     </div>
@@ -114,50 +134,3 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
 };
 
 export default ModelSelector;
-
-/**
- * 视频模型选择器（带 Sora/Veo 模式显示）
- */
-export const VideoModelSelector: React.FC<{
-  value: string;
-  onChange: (modelId: string) => void;
-  disabled?: boolean;
-}> = ({ value, onChange, disabled }) => {
-  const models = getVideoModels().filter(m => m.isEnabled);
-  const selectedModel = models.find(m => m.id === value) as VideoModelDefinition | undefined;
-  
-  return (
-    <div className="space-y-1">
-      <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">
-        视频模型
-      </label>
-      <div className="relative">
-        <select
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          disabled={disabled}
-          className="w-full appearance-none bg-white/[0.06] border border-white/10 text-white text-xs rounded-xl px-3 py-2.5 pr-8 focus:border-cyan-300/40 focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
-        >
-          {models.map((model) => {
-            const videoModel = model as VideoModelDefinition;
-            const modeLabel = videoModel.params.mode === 'async' ? '异步' : '同步';
-            return (
-              <option key={model.id} value={model.id}>
-                {model.name} ({modeLabel})
-              </option>
-            );
-          })}
-        </select>
-        <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500 pointer-events-none" />
-      </div>
-      {selectedModel && (
-        <p className="text-[9px] text-zinc-600">
-          模式: {selectedModel.params.mode === 'async' ? '异步（需要轮询）' : '同步（直接返回）'}
-          {selectedModel.params.supportedDurations.length > 1 && 
-            ` · 支持时长: ${selectedModel.params.supportedDurations.join('/')}秒`
-          }
-        </p>
-      )}
-    </div>
-  );
-};

@@ -1,15 +1,30 @@
+# 日志轮转：默认 json-file 无限增长会吃满磁盘
+x-default-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   postgres:
     image: postgres:16-alpine
     container_name: manga-studio-db
+    logging: *default-logging
     environment:
       POSTGRES_DB: manga_studio
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-    ports:
-      - "5432:5432"
+      # 强制从 .env 提供，杜绝默认弱口令（docker compose --env-file .env up）。
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+    # 不映射宿主机端口：数据库仅内部网络可达。
+    expose:
+      - "5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d manga_studio"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
     restart: unless-stopped
     networks:
       - manga-studio-network
@@ -18,20 +33,85 @@ services:
     build:
       context: ./server
       dockerfile: Dockerfile.server
+      args:
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org}
     image: manga-studio-api:latest
     container_name: manga-studio-api
-    ports:
-      - "3001:3001"
+    # API 不暴露宿主公网端口：仅内部网络可达（nginx 反代），
+    # 防止未认证的 API 端口暴露到公网（stage-3 硬化）。
+    expose:
+      - "3001"
     environment:
+      - NODE_ENV=production
       - DB_HOST=postgres
       - DB_PORT=5432
       - DB_NAME=manga_studio
       - DB_USER=postgres
-      - DB_PASSWORD=postgres
+      - DB_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+      # 登录/注册的 CORS + 匿名变更守卫白名单：必须是浏览器实际访问的 HTTPS 源，
+      # 否则所有登录请求会被 403 拒绝。
+      - CORS_ORIGINS=${CORS_ORIGINS:?CORS_ORIGINS must be set in .env}
+      - PUBLIC_APP_URL=${PUBLIC_APP_URL:?PUBLIC_APP_URL must be set in .env}
+      # 生产必需的加密密钥（32 字节 hex）；缺失时服务端 fail-close 拒绝启动。
+      - MODEL_ENC_KEY=${MODEL_ENC_KEY:?MODEL_ENC_KEY must be set in .env}
+      - REQUEST_HMAC_KEY=${REQUEST_HMAC_KEY:?REQUEST_HMAC_KEY must be set in .env}
+      - EMAIL_DELIVERY_KEY=${EMAIL_DELIVERY_KEY:?EMAIL_DELIVERY_KEY must be set in .env}
+      - IP_HMAC_SALT=${IP_HMAC_SALT:?IP_HMAC_SALT must be set in .env}
+      # 媒体文件持久化目录（对应 media-store 卷），容器重建不丢失
+      - MEDIA_STORAGE_DIR=/app/media-store
+      # 仅本地开发逃生阀：EMAIL_VERIFICATION_DISABLED 跳过邮箱验证（重复注册＝改密码）；
+      # RATE_LIMIT_DISABLED 旁路限流。生产 .env 两者都必须保持 false！
+      # Cookie Secure 开关：HTTP 过渡期在 .env 设 COOKIE_SECURE=false（见 session.js）
+      - COOKIE_SECURE=${COOKIE_SECURE:-}
+      # 人机验证（登录/注册 SVG 图形验证码）：生产设 true；测试环境默认关闭
+      - CAPTCHA_ENABLED=${CAPTCHA_ENABLED:-false}
+      # 手动转账收款说明（支付闭环 manual 渠道展示给用户）
+      - PAY_MANUAL_ACCOUNT=${PAY_MANUAL_ACCOUNT:-}
+      - EMAIL_VERIFICATION_DISABLED=${EMAIL_VERIFICATION_DISABLED:-false}
+      - RATE_LIMIT_DISABLED=${RATE_LIMIT_DISABLED:-false}
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_SECURE=${SMTP_SECURE:-false}
+      - SMTP_REQUIRE_TLS=${SMTP_REQUIRE_TLS:-true}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      - SMTP_FROM=${SMTP_FROM:-no-reply@example.com}
+      - BOOTSTRAP_ADMIN_EMAIL=${BOOTSTRAP_ADMIN_EMAIL:-}
+      # 备份：容器内调度（见 server/backup.js），产物必须落卷，否则随容器重建丢失；
+      # 设置 BACKUP_AGE_RECIPIENT（age 公钥）后自动加密为 .dump.age
+      - BACKUP_DISABLED=${BACKUP_DISABLED:-false}
+      - BACKUP_INTERVAL_HOURS=${BACKUP_INTERVAL_HOURS:-24}
+      - BACKUP_KEEP=${BACKUP_KEEP:-14}
+      - BACKUP_INITIAL_DELAY_MS=${BACKUP_INITIAL_DELAY_MS:-600000}
+      - BACKUP_AGE_RECIPIENT=${BACKUP_AGE_RECIPIENT:-}
+    volumes:
+      - backups:/app/backups
+      - media-store:/app/media-store
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck:
+      # nginx 启动时解析并缓存 upstream IP，必须在 api 可达后再启动 frontend
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:3001/api/health || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
     restart: unless-stopped
+    logging: *default-logging
+    networks:
+      - manga-studio-network
+
+  # 本地开发用假邮件服务器：所有验证/重置邮件落在 http://localhost:8025 网页里。
+  # profiles 门控：生产 `up -d` 不会启动；本地调试显式加 `--profile dev`。
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: manga-studio-mailpit
+    profiles:
+      - dev
+    ports:
+      - "8025:8025"
+    restart: unless-stopped
+    logging: *default-logging
     networks:
       - manga-studio-network
 
@@ -39,18 +119,121 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org}
     image: manga-studio:latest
     container_name: manga-studio-app
     ports:
-      - "3005:80"
+      - "${BIND_ADDR:-127.0.0.1}:3005:80"
     environment:
       - NODE_ENV=production
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1/ >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    restart: unless-stopped
+    logging: *default-logging
+    networks:
+      - manga-studio-network
+
+  # Monitoring stack (optional): enable with `--profile monitoring`
+  # Prometheus: http://localhost:9090
+  # Grafana:    http://localhost:3001 (admin/admin)
+  # Alertmanager: http://localhost:9093
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: manga-studio-prometheus
+    profiles:
+      - monitoring
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+      - '--web.enable-admin-api'
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/rules:/etc/prometheus/rules:ro
+      - prometheus-data:/prometheus
+    restart: unless-stopped
+    networks:
+      - manga-studio-network
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:9090/-/healthy || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    container_name: manga-studio-alertmanager
+    profiles:
+      - monitoring
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+      - '--web.external-url=http://localhost:9093'
+    ports:
+      - "127.0.0.1:9093:9093"
+    volumes:
+      - ./monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+    restart: unless-stopped
+    networks:
+      - manga-studio-network
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    container_name: manga-studio-grafana
+    profiles:
+      - monitoring
+    ports:
+      - "127.0.0.1:3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    restart: unless-stopped
+    networks:
+      - manga-studio-network
+    depends_on:
+      - prometheus
+
+  # Node exporter (host metrics) - enable with monitoring profile
+  node-exporter:
+    image: prom/node-exporter:v1.8.1
+    container_name: manga-studio-node-exporter
+    profiles:
+      - monitoring
+    command:
+      - '--path.rootfs=/host'
+      - '--collector.filesystem.mount-points-exclude=^/(dev|proc|sys|var/lib/docker/.+)($|/)'
+    pid: host
+    ports:
+      - "127.0.0.1:9100:9100"
+    volumes:
+      - /:/host:ro
     restart: unless-stopped
     networks:
       - manga-studio-network
 
 volumes:
   pgdata:
+  backups:
+  media-store:
+  prometheus-data:
+  alertmanager-data:
+  grafana-data:
 
 networks:
   manga-studio-network:

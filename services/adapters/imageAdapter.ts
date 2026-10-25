@@ -1,7 +1,8 @@
 import { ImageModelDefinition, ImageGenerateOptions, AspectRatio } from '../../types/model';
-import { getApiKeyForModel, getApiBaseUrlForModel, getActiveImageModel } from '../modelRegistry';
+import { getApiKeyForModel, getApiBaseUrlForModel, getActiveImageModel, getModelById } from '../modelRegistry';
 import { ApiKeyError } from './chatAdapter';
 import { proxyFetch } from '../apiClient';
+import { invokeImage, makeIdempotencyKey } from '../modelGatewayClient';
 
 const retryOperation = async <T>(
   operation: () => Promise<T>,
@@ -29,15 +30,26 @@ const retryOperation = async <T>(
   throw lastError;
 };
 
-export const callImageApi = async (
-  options: ImageGenerateOptions,
-  model?: ImageModelDefinition
-): Promise<string> => {
-  const activeModel = model || getActiveImageModel();
-  if (!activeModel) {
-    throw new Error('没有可用的图片模型');
-  }
+const extractDataUrlFromContent = (text: string): string | null => {
+  if (!text || typeof text !== 'string') return null;
+  if (/^data:image\//i.test(text.trim())) return text.trim();
+  const markdownMatch = text.match(/!\[[^\]]*\]\((data:image\/[^;]+;base64,[^)]+)\)/i);
+  if (markdownMatch) return markdownMatch[1];
+  const anyDataMatch = text.match(/(data:image\/[^;]+;base64,[A-Za-z0-9+/=]+)/);
+  if (anyDataMatch) return anyDataMatch[1];
+  return null;
+};
 
+const parseImageGatewayResult = (result: any): string => {
+  // AssetResultV1: { schemaVersion: 1, kind: 'asset', assetId, contentType, sizeBytes }
+  // Need to fetch content via authenticated media endpoint
+  return result.assetId; // Return assetId, caller will fetch content
+};
+
+const legacyCallImageApi = async (
+  options: ImageGenerateOptions,
+  activeModel: ImageModelDefinition
+): Promise<string> => {
   const apiKey = getApiKeyForModel(activeModel.id);
   if (!apiKey) {
     throw new ApiKeyError('API Key 缺失，请在设置中配置 API Key');
@@ -116,17 +128,6 @@ export const callImageApi = async (
     return await res.json();
   });
 
-  const extractDataUrlFromContent = (text: string): string | null => {
-    if (!text || typeof text !== 'string') return null;
-    if (/^data:image\//i.test(text.trim())) return text.trim();
-    const markdownMatch = text.match(/!\[[^\]]*\]\((data:image\/[^;]+;base64,[^)]+)\)/i);
-    if (markdownMatch) return markdownMatch[1];
-    const anyDataMatch = text.match(/(data:image\/[^;]+;base64,[A-Za-z0-9+/=]+)/);
-    if (anyDataMatch) return anyDataMatch[1];
-    return null;
-  };
-
-  // 兼容 OpenAI choices 與 Gemini candidates 兩種圖片返回格式。
   const choices = response.choices;
   if (choices && choices.length > 0) {
     const msg = choices[0].message;
@@ -155,6 +156,46 @@ export const callImageApi = async (
     }
   }
   throw new Error('图片生成失败：未能从响应中提取图片数据');
+};
+
+const blobToDataUrl = (blob: Blob): Promise<string> =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(String(reader.result));
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+
+export const callImageApi = async (
+  options: ImageGenerateOptions,
+  model?: ImageModelDefinition
+): Promise<string> => {
+  const activeModel = model || getActiveImageModel();
+  if (!activeModel) {
+    throw new Error('没有可用的图片模型');
+  }
+
+  // Gateway 路由：adapter_kind === 'gateway' 走服务端网关
+  if (activeModel.adapter_kind === 'gateway') {
+    const result = await invokeImage(
+      activeModel.id,
+      { 
+        prompt: options.prompt, 
+        aspectRatio: (options.aspectRatio || '16:9') as any, 
+        referenceAssetIds: options.referenceImages 
+      },
+      makeIdempotencyKey('image')
+    );
+    // Fetch media content via authenticated endpoint
+    const contentRes = await fetch(`/api/model-invocations/media-assets/${result.assetId}/content`);
+    if (!contentRes.ok) throw new Error(`媒体获取失败 (${contentRes.status})`);
+    const blob = await contentRes.blob();
+    return blobToDataUrl(blob);
+  }
+  
+  // Legacy 直连：仅开发/迁移期兜底
+  console.warn('[Legacy] 使用直连适配器，建议迁移到网关模型');
+  return legacyCallImageApi(options, activeModel);
 };
 
 export const isAspectRatioSupported = (

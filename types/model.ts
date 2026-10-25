@@ -40,6 +40,8 @@ export interface ModelDefinitionBase {
   isBuiltIn: boolean;
   isEnabled: boolean;
   apiKey?: string;
+  /** 'legacy-vendor' (default) = existing adapters; 'gateway' = self-hosted gateway */
+  adapter_kind?: 'legacy-vendor' | 'gateway';
 }
 
 export interface ChatModelDefinition extends ModelDefinitionBase {
@@ -66,6 +68,8 @@ export interface ModelProvider {
   apiKey?: string;
   isBuiltIn: boolean;
   isDefault: boolean;
+  /** 'gateway' marks providers managed by the server-side model gateway */
+  adapter_kind?: 'legacy-vendor' | 'gateway';
 }
 
 export interface ActiveModels {
@@ -103,6 +107,8 @@ export interface VideoGenerateOptions {
   endImage?: string;
   aspectRatio?: AspectRatio;
   duration?: VideoDuration;
+  /** 网关模型 id（多服务商改造后由选择器显式传入；缺省走单模型自动采用） */
+  modelId?: string;
 }
 
 export const DEFAULT_CHAT_PARAMS: ChatModelParams = {
@@ -310,8 +316,11 @@ export const ALL_BUILTIN_MODELS: ModelDefinition[] = [
   ...BUILTIN_VIDEO_MODELS,
 ];
 
+/** 默认激活的对话模型（与 BUILTIN_CHAT_MODELS / DEFAULT_ACTIVE_MODELS 种子一致） */
+export const DEFAULT_CHAT_MODEL = 'qwen-max';
+
 export const DEFAULT_ACTIVE_MODELS: ActiveModels = {
-  chat: 'qwen-max',
+  chat: DEFAULT_CHAT_MODEL,
   image: 'doubao-image',
   video: 'doubao-video',
 };

@@ -1,15 +1,14 @@
 import React from 'react';
 import { QUICK_START_OPTIONS } from './constants';
-import { FileText, Film } from 'lucide-react';
+import { FileText } from 'lucide-react';
 
 interface ActionPageProps {
   onComplete: () => void;
-  onQuickStart: (option: 'script' | 'example') => void;
+  onQuickStart: (option: 'script') => void;
 }
 
 const icons = {
   script: FileText,
-  example: Film,
 };
 
 const ActionPage: React.FC<ActionPageProps> = ({ onComplete, onQuickStart }) => {
@@ -32,7 +31,7 @@ const ActionPage: React.FC<ActionPageProps> = ({ onComplete, onQuickStart }) => 
           return (
             <button
               key={option.id}
-              onClick={() => onQuickStart(option.id as 'script' | 'example')}
+              onClick={() => onQuickStart(option.id as 'script')}
               className="w-full flex items-center gap-4 bg-white/[0.045] border border-white/10 rounded-2xl p-4 text-left hover:border-cyan-200/35 hover:bg-white/[0.07] transition-all group"
             >
               <div className="w-12 h-12 rounded-xl bg-cyan-300/10 border border-cyan-200/25 flex items-center justify-center flex-shrink-0 group-hover:bg-cyan-300/20 transition-colors">

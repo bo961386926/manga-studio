@@ -1,3 +1,5 @@
+import { DEFAULT_CHAT_MODEL } from '../../types/model';
+
 export const STYLES = {
   mainContainer: "flex flex-col h-full bg-slate-950/35 relative overflow-hidden backdrop-blur-sm",
   header: "h-16 border-b border-white/10 bg-slate-950/55 px-6 flex items-center justify-between shrink-0 backdrop-blur-xl",
@@ -34,7 +36,7 @@ export const DEFAULTS = {
   language: '中文',
   visualStyle: 'live-action',
   genre: 'Cinematic',
-  modelVersion: 'gpt-5.1',
+  modelVersion: DEFAULT_CHAT_MODEL,
   batchGenerateDelay: 3000,
 };
 

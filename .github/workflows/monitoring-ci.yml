@@ -1,0 +1,57 @@
+name: Monitoring CI
+
+on:
+  push:
+    branches: [main, 'feat/**']
+  pull_request:
+    branches: [main]
+
+jobs:
+  prometheus-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install promtool
+        run: |
+          curl -sL https://github.com/prometheus/prometheus/releases/download/v2.53.0/prometheus-2.53.0.linux-amd64.tar.gz | tar xz
+          echo "$PWD/prometheus-2.53.0.linux-amd64" >> $GITHUB_PATH
+      
+      - name: Validate Prometheus config
+        run: promtool check config monitoring/prometheus.yml
+      
+      - name: Validate Prometheus rules
+        run: promtool check rules monitoring/rules/*.yml
+
+  grafana-dashboard-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Validate Grafana dashboard JSON
+        run: |
+          for f in monitoring/grafana/dashboards/*.json; do
+            echo "Validating $f..."
+            jq empty "$f" || exit 1
+          done
+
+  alertmanager-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install amtool
+        run: |
+          curl -sL https://github.com/prometheus/alertmanager/releases/download/v0.27.0/alertmanager-0.27.0.linux-amd64.tar.gz | tar xz
+          echo "$PWD/alertmanager-0.27.0.linux-amd64" >> $GITHUB_PATH
+      
+      - name: Validate Alertmanager config
+        run: amtool check-config monitoring/alertmanager.yml
+
+  docker-compose-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Validate docker-compose syntax
+        run: docker compose --profile monitoring config --quiet
